@@ -469,7 +469,7 @@ def get_school_by_user(db: Session, user_id: int) -> Optional["School"]:
         return None
     return db.query(School).filter(School.sekolah_id == user.school_id).first()
 # ─── Profile CRUD ────────────────────────────────────────────────
-from .models import UserProfile, AdminProfile, OperatorProfile
+from models import UserProfile, AdminProfile, OperatorProfile
 
 def _get_profile_model(role: str):
     if role == "admin":    return AdminProfile
@@ -512,7 +512,7 @@ def _haversine(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
  
  
 def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None):
-    from .models import UserProfile
+    from models import UserProfile
  
     school = db.query(School).filter(School.sekolah_id == sekolah_id).first()
     if not school:
@@ -688,11 +688,11 @@ def get_wilayah_kelurahan(db, kabupaten: str, kecamatan: str):
 
 # ─── Biaya CRUD ──────────────────────────────────────────────────
 def get_biaya(db, sekolah_id: int):
-    from .models import SekolahBiaya
+    from models import SekolahBiaya
     return db.query(SekolahBiaya).filter(SekolahBiaya.sekolah_id == sekolah_id).first()
  
 def upsert_biaya(db, sekolah_id: int, data: dict):
-    from .models import SekolahBiaya
+    from models import SekolahBiaya
     biaya = db.query(SekolahBiaya).filter(SekolahBiaya.sekolah_id == sekolah_id).first()
     if biaya:
         for k, v in data.items():
@@ -706,13 +706,13 @@ def upsert_biaya(db, sekolah_id: int, data: dict):
  
 # ─── Fasilitas CRUD ──────────────────────────────────────────────
 def get_fasilitas(db, sekolah_id: int):
-    from .models import SekolahFasilitas
+    from models import SekolahFasilitas
     return db.query(SekolahFasilitas).filter(
         SekolahFasilitas.sekolah_id == sekolah_id
     ).all()
  
 def create_fasilitas(db, sekolah_id: int, data: dict):
-    from .models import SekolahFasilitas
+    from models import SekolahFasilitas
     f = SekolahFasilitas(sekolah_id=sekolah_id, **data)
     db.add(f)
     db.commit()
@@ -720,7 +720,7 @@ def create_fasilitas(db, sekolah_id: int, data: dict):
     return f
  
 def update_fasilitas(db, fasilitas_id: int, data: dict):
-    from .models import SekolahFasilitas
+    from models import SekolahFasilitas
     f = db.query(SekolahFasilitas).filter(SekolahFasilitas.id == fasilitas_id).first()
     if not f:
         return None
@@ -731,7 +731,7 @@ def update_fasilitas(db, fasilitas_id: int, data: dict):
     return f
  
 def delete_fasilitas(db, fasilitas_id: int):
-    from .models import SekolahFasilitas
+    from models import SekolahFasilitas
     f = db.query(SekolahFasilitas).filter(SekolahFasilitas.id == fasilitas_id).first()
     if not f:
         return False
@@ -742,7 +742,7 @@ def delete_fasilitas(db, fasilitas_id: int):
 # ─── Pendaftar (reuse logika simulasi) ──────────────────────────
 def get_pendaftar_sekolah(db, sekolah_id: int):
     "Daftar user yang salah satu anaknya memilih sekolah ini."
-    from .models import UserProfile, User
+    from models import UserProfile, User
     school = db.query(School).filter(School.sekolah_id == sekolah_id).first()
     if not school:
         return []

@@ -4,8 +4,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
-from .db import SessionLocal
-from .schemas import (
+from db import SessionLocal
+from schemas import (
     BatasanWilayahResponse,
     LoginSchema, RegisterSchema,
     SchoolMapResponse,

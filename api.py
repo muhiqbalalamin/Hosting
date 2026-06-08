@@ -15,7 +15,7 @@ from schemas import (
     BiayaUpsert,  BiayaResponse,
     FasilitasCreate, FasilitasResponse,
 )
-from .crud import (
+from crud import (
     UserAlreadyExistsError,
     authenticate_user, logout_user, create_user,
     get_school_by_npsn, get_school_by_id, get_schools,
@@ -31,7 +31,7 @@ from .crud import (
     get_wilayah_kabupaten, get_wilayah_kecamatan,get_wilayah_kelurahan,
     get_pendaftar_sekolah,
 )
-from .models import (School, SekolahBiaya, SekolahFasilitas)
+from models import (School, SekolahBiaya, SekolahFasilitas)
 
 router = APIRouter()
 

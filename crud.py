@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
-from .models import BatasanWilayah, School, User, Zonasi
-from .utils import hash_password, verify_password
+from models import BatasanWilayah, School, User, Zonasi
+from utils import hash_password, verify_password
 from typing import Optional
 from sqlalchemy import text
 import json

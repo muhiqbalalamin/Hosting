@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .api import router
-from .db import engine, Base
+from api import router
+from db import engine, Base
 
 # Auto-create all tables (including new profile tables)
 Base.metadata.create_all(bind=engine)

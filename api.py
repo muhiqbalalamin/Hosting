@@ -156,22 +156,33 @@ def list_users(db: Session = Depends(get_db)):
         for u in users
     ]
 
-@router.get("/schools", response_model=list[SchoolResponse])
+@router.get("/schools", response_model=dict)
 def list_schools(
-    jenjang: Optional[str] = Query(default=None),
-    kecamatan: Optional[str] = Query(default=None),
+    jenjang:       Optional[str] = Query(default=None),
+    kecamatan:     Optional[str] = Query(default=None),
     status_filter: Optional[str] = Query(default=None, alias="status"),
-    nama: Optional[str] = Query(default=None),
+    nama:          Optional[str] = Query(default=None),
+    page:          int           = Query(default=1, ge=1),
+    limit:         int           = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db)
 ):
-    return get_schools(
+    result = get_schools(
         db,
         jenjang=jenjang,
         kecamatan=kecamatan,
         status=status_filter,
         nama=nama,
-        apply_sampling=False  # ← sampling OFF 09-05-2026
+        apply_sampling=False,
+        page=page,
+        limit=limit,
     )
+    return {
+        "items": [SchoolResponse.model_validate(s) for s in result["items"]],
+        "total": result["total"],
+        "page":  page,
+        "limit": limit,
+        "pages": -(-result["total"] // limit),
+    }
 
 
 @router.get("/schools/{school_id}", response_model=SchoolResponse)

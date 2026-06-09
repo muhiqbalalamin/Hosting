@@ -1,10 +1,24 @@
 import json
+import os
 import re
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 from db import SessionLocal
+
+# ── Kode registrasi dari env variable (set di Railway Variables) ──
+ADMIN_CODE    = os.getenv("ADMIN_CODE")
+OPERATOR_CODE = os.getenv("OPERATOR_CODE")
+
+# ── Guard sederhana untuk endpoint sensitif ──────────────────────
+def require_admin(x_role: str = Header(default="", alias="X-Role")):
+    if x_role != "admin":
+        raise HTTPException(status_code=403, detail="Akses ditolak: hanya admin")
+
+def require_operator_or_admin(x_role: str = Header(default="", alias="X-Role")):
+    if x_role not in ("admin", "sekolah"):
+        raise HTTPException(status_code=403, detail="Akses ditolak")
 from schemas import (
     BatasanWilayahResponse,
     LoginSchema, RegisterSchema,
@@ -73,10 +87,10 @@ def save_user_profile(
 @router.post("/auth/register")
 def register(data: RegisterSchema, db: Session = Depends(get_db)):
     if data.role == "admin":
-        if data.admin_code != "ADM-JABAR-2026":
+        if data.admin_code != ADMIN_CODE:
             raise HTTPException(status_code=403, detail="Kode registrasi Admin tidak valid")
     elif data.role == "sekolah":
-        if data.operator_code != "OPS-SEKOLAH-2026":
+        if data.operator_code != OPERATOR_CODE:
             raise HTTPException(status_code=403, detail="Kode registrasi Operator tidak valid")
         if not data.npsn:
             raise HTTPException(status_code=400, detail="NPSN / ID Sekolah wajib diisi untuk Instansi Sekolah")
@@ -286,7 +300,7 @@ def map_zonasi(
 # SCHOOL — Create (Admin only)
 # ──────────────────────────────────────────────
 @router.post("/schools", response_model=dict, status_code=201)
-def create_school_endpoint(data: "SchoolCreate", db: "Session" = Depends(get_db)):
+def create_school_endpoint(data: "SchoolCreate", db: "Session" = Depends(get_db), _=Depends(require_admin)):
     school = create_school(db, data)
     return {"message": "Sekolah berhasil ditambahkan", "sekolah_id": school.sekolah_id}
  
@@ -299,6 +313,7 @@ def update_school_endpoint(
     school_id: int,
     data: "SchoolUpdate",
     db: "Session" = Depends(get_db),
+    _=Depends(require_operator_or_admin),
 ):
     school = update_school(db, school_id, data)
     if not school:
@@ -310,7 +325,7 @@ def update_school_endpoint(
 # SCHOOL — Delete (Admin only)
 # ──────────────────────────────────────────────
 @router.delete("/schools/{school_id}", response_model=dict)
-def delete_school_endpoint(school_id: int, db: "Session" = Depends(get_db)):
+def delete_school_endpoint(school_id: int, db: "Session" = Depends(get_db), _=Depends(require_admin)):
     deleted = delete_school(db, school_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Sekolah tidak ditemukan")
@@ -321,7 +336,7 @@ def delete_school_endpoint(school_id: int, db: "Session" = Depends(get_db)):
 # ZONASI — Create
 # ──────────────────────────────────────────────
 @router.post("/zonasi", response_model=dict, status_code=201)
-def create_zonasi_endpoint(data: "ZonasiCreate", db: "Session" = Depends(get_db)):
+def create_zonasi_endpoint(data: "ZonasiCreate", db: "Session" = Depends(get_db), _=Depends(require_admin)):
     z = create_zonasi(db, data)
     return {"message": "Zonasi berhasil ditambahkan", "zonasi_id": z.zonasi_id}
  
@@ -330,7 +345,7 @@ def create_zonasi_endpoint(data: "ZonasiCreate", db: "Session" = Depends(get_db)
 # ZONASI — Update
 # ──────────────────────────────────────────────
 @router.put("/zonasi/{zonasi_id}", response_model=ZonasiResponse)
-def update_zonasi_endpoint(zonasi_id: int, data: "ZonasiUpdate", db: "Session" = Depends(get_db)):
+def update_zonasi_endpoint(zonasi_id: int, data: "ZonasiUpdate", db: "Session" = Depends(get_db), _=Depends(require_admin)):
     z = update_zonasi(db, zonasi_id, data)
     if not z:
         raise HTTPException(status_code=404, detail="Zonasi tidak ditemukan")
@@ -341,7 +356,7 @@ def update_zonasi_endpoint(zonasi_id: int, data: "ZonasiUpdate", db: "Session" =
 # ZONASI — Delete
 # ──────────────────────────────────────────────
 @router.delete("/zonasi/{zonasi_id}", response_model=dict)
-def delete_zonasi_endpoint(zonasi_id: int, db: "Session" = Depends(get_db)):
+def delete_zonasi_endpoint(zonasi_id: int, db: "Session" = Depends(get_db), _=Depends(require_admin)):
     deleted = delete_zonasi(db, zonasi_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Zonasi tidak ditemukan")

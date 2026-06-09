@@ -63,7 +63,9 @@ def get_schools(
     kecamatan: str | None = None,
     status: str | None = None,
     nama: str | None = None,
-    apply_sampling: bool = False,   # ← toggle sampling 
+    apply_sampling: bool = False,
+    page: int | None = None,     # ← pagination
+    limit: int = 100,            # ← default 100 per halaman
 ):
     # Limit per jenjang per kabupaten
     LIMITS = {
@@ -103,7 +105,14 @@ def get_schools(
             query = query.filter(School.status.ilike(status))
         if nama:
             query = query.filter(School.nama_sekolah.ilike(f"%{nama}%"))
-        return query.order_by(School.nama_sekolah.asc()).all()
+        query = query.order_by(School.nama_sekolah.asc())
+        total = query.count()
+        if page is not None:
+            offset = (page - 1) * limit
+            items  = query.offset(offset).limit(limit).all()
+        else:
+            items  = query.all()
+        return {"items": items, "total": total}
 
     # ── Sampling dengan CTE + ROW_NUMBER ──────────────────────────
     sql = text(f"""

@@ -177,7 +177,7 @@ def list_schools(
         limit=limit,
     )
     return {
-        "items": [SchoolResponse.model_validate(s) for s in result["items"]],
+        "items": [SchoolResponse.model_validate(s, from_attributes=True) for s in result["items"]],
         "total": result["total"],
         "page":  page,
         "limit": limit,

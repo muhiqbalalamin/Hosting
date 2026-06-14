@@ -5,6 +5,7 @@ from typing import Optional
 from sqlalchemy import text
 import json
 import math
+from routing import get_distances_many_to_one, get_distances_one_to_many, haversine_km
 
 class UserAlreadyExistsError(Exception):
     pass
@@ -520,6 +521,151 @@ def _haversine(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
  
  
+# ── Normalisasi jenjang ke key sederhana (SD/SMP/SMA/SMK) ─────────
+def _norm_jenjang(j: str) -> str:
+    j = (j or "").upper().strip()
+    if any(x in j for x in ("SMK",)):           return "SMK"
+    if any(x in j for x in ("SMA", "MA")):      return "SMA"
+    if any(x in j for x in ("SMP", "MTS")):     return "SMP"
+    if any(x in j for x in ("SD", "MI")):       return "SD"
+    return ""
+
+
+# ── Jalur Prestasi: bobot poin berdasarkan tingkat pencapaian ────
+TINGKAT_POIN_PRESTASI = {
+    "nasional":  100,
+    "provinsi":  75,
+    "kabupaten": 50,
+    "sekolah":   25,
+}
+
+
+def _poin_prestasi_tertinggi(prestasi_list) -> int:
+    """Ambil poin tertinggi dari semua prestasi yang diinput (skala 0-100)."""
+    if not prestasi_list or not isinstance(prestasi_list, list):
+        return 0
+    poin = 0
+    for p in prestasi_list:
+        if not isinstance(p, dict):
+            continue
+        tingkat = (p.get("tingkat") or "").strip().lower()
+        poin = max(poin, TINGKAT_POIN_PRESTASI.get(tingkat, 0))
+    return poin
+
+
+# ── Rekomendasi Sekolah: radius zona per jenjang ──────────────────
+DEFAULT_RADIUS_KM = {"SD": 3, "SMP": 5, "SMA": 8, "SMK": 8}
+MAX_RADIUS_KM     = 15   # batas maksimum absolut, walau radius zonasi > ini
+
+
+def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
+                             jenjang_anak: str, nilai_rapor, prestasi_list):
+    """
+    Cari Top 10 sekolah dengan Skor Kelayakan tertinggi untuk anak ini.
+
+    Skor Kelayakan = Skor Jarak * 0.7 + Skor Akademik * 0.3
+      - Skor Jarak: 100 jika jarak=0, menurun linear ke 0 di radius zona
+      - Skor Akademik: nilai_rapor * 0.6 + poin_prestasi * 0.4
+
+    Radius pencarian mengikuti tabel Zonasi (admin-configurable) untuk
+    jenjang terkait, dibatasi maksimum MAX_RADIUS_KM.
+    """
+    jenjang_norm = _norm_jenjang(jenjang_anak)
+    if not jenjang_norm:
+        return {"error": "Jenjang anak belum diisi di profil"}
+
+    if home_lat is None or home_lng is None:
+        return {"error": "Lokasi rumah belum diisi di profil"}
+
+    # ── Tentukan radius pencarian dari tabel Zonasi (fallback default) ──
+    radius_km = DEFAULT_RADIUS_KM.get(jenjang_norm, 8)
+    for z in db.query(Zonasi).all():
+        nz = (z.nama_zonasi or "").upper()
+        if jenjang_norm in nz and z.radius_meter:
+            radius_km = z.radius_meter / 1000
+            break
+    radius_km = min(radius_km, MAX_RADIUS_KM)
+
+    # ── Bounding box query (mempersempit sebelum hitung haversine) ──
+    lat_delta = radius_km / 111.0
+    lng_delta = radius_km / (111.0 * max(math.cos(math.radians(home_lat)), 0.1))
+
+    rows = (
+        db.query(School)
+        .filter(School.latitude.isnot(None), School.longitude.isnot(None))
+        .filter(School.latitude.between(home_lat - lat_delta, home_lat + lat_delta))
+        .filter(School.longitude.between(home_lng - lng_delta, home_lng + lng_delta))
+        .all()
+    )
+
+    # ── Skor akademik (konstan untuk anak ini) ──────────────────────
+    try:
+        nilai_rapor_f = float(nilai_rapor) if nilai_rapor is not None else None
+    except (TypeError, ValueError):
+        nilai_rapor_f = None
+
+    poin_prestasi = _poin_prestasi_tertinggi(prestasi_list)
+    skor_akademik = round((nilai_rapor_f or 0) * 0.6 + poin_prestasi * 0.4, 1)
+
+    results = []
+    for s in rows:
+        if _norm_jenjang(s.jenjang or "") != jenjang_norm:
+            continue
+        dist_km = _haversine(home_lat, home_lng, s.latitude, s.longitude)
+        if dist_km > radius_km:
+            continue
+
+        skor_jarak     = max(0.0, round((1 - dist_km / radius_km) * 100, 1))
+        skor_kelayakan = round(skor_jarak * 0.7 + skor_akademik * 0.3, 1)
+
+        results.append({
+            "sekolah_id":     s.sekolah_id,
+            "nama_sekolah":   s.nama_sekolah,
+            "jenjang":        s.jenjang,
+            "kecamatan":      s.kecamatan,
+            "alamat":         s.alamat,
+            "akreditasi":     s.akreditasi,
+            "status":         s.status,
+            "kuota":          s.kuota,
+            "daya_tampung":   s.daya_tampung,
+            "lat":            s.latitude,
+            "lng":            s.longitude,
+            "jarak_lurus_km": round(dist_km, 2),
+            "skor_jarak":     skor_jarak,
+            "skor_akademik":  skor_akademik,
+            "skor_kelayakan": skor_kelayakan,
+        })
+
+    results.sort(key=lambda x: x["skor_kelayakan"], reverse=True)
+    top10 = results[:10]
+
+    # ── Jarak via jalan untuk Top 10 saja (1 panggilan ORS, hemat kuota) ──
+    if top10:
+        destinations = [
+            {"sekolah_id": r["sekolah_id"], "lat": r["lat"], "lng": r["lng"]}
+            for r in top10
+        ]
+        dual = get_distances_one_to_many(db, home_lat, home_lng, destinations)
+        for r in top10:
+            info = dual.get(r["sekolah_id"])
+            if info:
+                r["jarak_jalan_km"]     = info["jarak_jalan_km"]
+                r["durasi_jalan_menit"] = info["durasi_jalan_menit"]
+                r["jalan_tersedia"]     = info["jalan_tersedia"]
+            r.pop("lat", None)
+            r.pop("lng", None)
+
+    return {
+        "jenjang":        jenjang_norm,
+        "radius_km":      radius_km,
+        "nilai_rapor":    nilai_rapor_f,
+        "poin_prestasi":  poin_prestasi,
+        "skor_akademik":  skor_akademik,
+        "total_kandidat": len(results),
+        "rekomendasi":    top10,
+    }
+
+
 def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None):
     from models import UserProfile
  
@@ -541,6 +687,10 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None):
             "school_lng":      None,
             "peringkat_saya":  None,
             "status_saya":     None,
+            "kuota_prestasi":          None,
+            "peringkat_prestasi_saya": None,
+            "status_prestasi_saya":    None,
+            "skor_prestasi_saya":      None,
             "total_pendaftar": 0,
             "peserta":         [],
         }
@@ -549,15 +699,6 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None):
     candidates = []
     target     = school.nama_sekolah.strip().lower()
     seen_pairs = set()  # (user_id, nama_anak) agar tidak duplikat
-
-    # Helper: normalisasi jenjang ke key sederhana untuk perbandingan
-    def _norm_jenjang(j: str) -> str:
-        j = (j or "").upper().strip()
-        if any(x in j for x in ("SMK",)):           return "SMK"
-        if any(x in j for x in ("SMA", "MA")):      return "SMA"
-        if any(x in j for x in ("SMP", "MTS")):     return "SMP"
-        if any(x in j for x in ("SD", "MI")):       return "SD"
-        return ""
 
     sekolah_jenjang = _norm_jenjang(school.jenjang or "")
 
@@ -600,39 +741,95 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None):
                 profile.home_lat, profile.home_lng,
                 school.latitude,  school.longitude,
             )
+
+            # ── Jalur Prestasi: nilai rapor + poin prestasi ──────────
+            nilai_rapor = child.get("nilaiRapor")
+            try:
+                nilai_rapor = float(nilai_rapor) if nilai_rapor is not None else None
+            except (TypeError, ValueError):
+                nilai_rapor = None
+
+            poin_prestasi = _poin_prestasi_tertinggi(child.get("prestasi"))
+            skor_prestasi = round((nilai_rapor or 0) * 0.6 + poin_prestasi * 0.4, 2)
+
             candidates.append({
                 "user_id":   profile.user_id,
                 "nama_anak": (child.get("nama") or "").strip() or "—",
                 "jenjang":   (child.get("jenjang") or "").strip() or "—",
-                "jarak_km":  round(dist_km, 2),
+                "jarak_lurus_km": round(dist_km, 2),
+                "home_lat":  profile.home_lat,
+                "home_lng":  profile.home_lng,
                 "is_me":     profile.user_id == requesting_user_id,
                 "kecamatan": getattr(profile, "kecamatan", None) or "—",
                 "kelurahan": getattr(profile, "kelurahan", None) or "—",
+                "nilai_rapor":   nilai_rapor,
+                "skor_prestasi": skor_prestasi,
             })
             # Tidak break — biarkan anak lain dari user yg sama ikut jika ada
- 
-    candidates.sort(key=lambda x: x["jarak_km"])
- 
+
+    # ── Peringkat & status zonasi resmi: berbasis JARAK LURUS ────────
+    candidates.sort(key=lambda x: x["jarak_lurus_km"])
+
+    # ── Jarak via jalan: info tambahan, dihitung berdampingan ────────
+    if candidates:
+        origins = [
+            {"key": idx, "lat": c["home_lat"], "lng": c["home_lng"]}
+            for idx, c in enumerate(candidates)
+        ]
+        dual = get_distances_many_to_one(
+            db, origins, school.latitude, school.longitude, school.sekolah_id
+        )
+        for idx, c in enumerate(candidates):
+            info = dual.get(idx)
+            if info:
+                c["jarak_jalan_km"]     = info["jarak_jalan_km"]
+                c["durasi_jalan_menit"] = info["durasi_jalan_menit"]
+                c["jalan_tersedia"]     = info["jalan_tersedia"]
+
     kuota          = school.kuota or 0
+
+    # ── Jalur Prestasi: ranking berdasarkan skor (nilai rapor + prestasi) ──
+    # Kuota jalur prestasi diasumsikan 20% dari kuota total (min. 1 jika kuota>0),
+    # mengikuti proporsi umum jalur prestasi pada PPDB.
+    kuota_prestasi = max(1, round(kuota * 0.2)) if kuota else 0
+
+    candidates_by_prestasi = sorted(candidates, key=lambda x: x["skor_prestasi"], reverse=True)
+    for i, c in enumerate(candidates_by_prestasi):
+        c["peringkat_prestasi"] = i + 1
+        c["status_prestasi"] = "Lolos" if c["peringkat_prestasi"] <= kuota_prestasi else "Tidak Lolos"
+
     peserta        = []
     peringkat_saya = None
     status_saya    = None
- 
+    peringkat_prestasi_saya = None
+    status_prestasi_saya    = None
+    skor_prestasi_saya      = None
+
     for i, c in enumerate(candidates):
         rank   = i + 1
         status = "Lolos" if rank <= kuota else "Tidak Lolos"
         if c["is_me"]:
             peringkat_saya = rank
             status_saya    = status
+            peringkat_prestasi_saya = c.get("peringkat_prestasi")
+            status_prestasi_saya    = c.get("status_prestasi")
+            skor_prestasi_saya      = c.get("skor_prestasi")
         peserta.append({
             "peringkat": rank,
             "nama_anak": c["nama_anak"],
             "jenjang":   c["jenjang"],
-            "jarak_km":  c["jarak_km"],
+            "jarak_lurus_km":     c["jarak_lurus_km"],
+            "jarak_jalan_km":     c.get("jarak_jalan_km"),
+            "durasi_jalan_menit": c.get("durasi_jalan_menit"),
+            "jalan_tersedia":     c.get("jalan_tersedia", False),
             "status":    status,
             "is_me":     c["is_me"],
             "kecamatan": c["kecamatan"],
             "kelurahan": c["kelurahan"],
+            "nilai_rapor":        c.get("nilai_rapor"),
+            "skor_prestasi":      c.get("skor_prestasi"),
+            "peringkat_prestasi": c.get("peringkat_prestasi"),
+            "status_prestasi":    c.get("status_prestasi"),
         })
  
     return {
@@ -648,6 +845,10 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None):
         "school_lng":      school.longitude,   # ← untuk map di frontend
         "peringkat_saya":  peringkat_saya,
         "status_saya":     status_saya,
+        "kuota_prestasi":          kuota_prestasi,
+        "peringkat_prestasi_saya": peringkat_prestasi_saya,
+        "status_prestasi_saya":    status_prestasi_saya,
+        "skor_prestasi_saya":      skor_prestasi_saya,
         "total_pendaftar": len(candidates),
         "peserta":         peserta,
     }
@@ -780,14 +981,6 @@ def get_pendaftar_sekolah(db, sekolah_id: int):
             if target not in tujuan_list:
                 continue
  
-            dist_km = None
-            if (profile.home_lat and profile.home_lng and
-                    school.latitude and school.longitude):
-                dist_km = round(_haversine(
-                    profile.home_lat, profile.home_lng,
-                    school.latitude, school.longitude
-                ), 2)
- 
             # Ambil nama user (ortu)
             user = db.query(User).filter(User.id == profile.user_id).first()
  
@@ -798,13 +991,33 @@ def get_pendaftar_sekolah(db, sekolah_id: int):
                 "alamat":    getattr(profile, "alamat", None) or "—",
                 "kecamatan": getattr(profile, "kecamatan", None) or "—",
                 "jenjang":   (child.get("jenjang") or "").strip() or "—",
-                "jarak_km":  dist_km,
+                "home_lat":  profile.home_lat,
+                "home_lng":  profile.home_lng,
+                "jarak_lurus_km": None,
             })
             break
- 
-    # Sort by jarak
-    candidates.sort(key=lambda x: (x["jarak_km"] is None, x["jarak_km"] or 0))
- 
+
+    # ── Jarak lurus (selalu) + jarak jalan (info tambahan) ───────────
+    if school.latitude and school.longitude:
+        origins = [
+            {"key": idx, "lat": c["home_lat"], "lng": c["home_lng"]}
+            for idx, c in enumerate(candidates) if c["home_lat"] and c["home_lng"]
+        ]
+        if origins:
+            dual = get_distances_many_to_one(
+                db, origins, school.latitude, school.longitude, school.sekolah_id
+            )
+            for idx, c in enumerate(candidates):
+                info = dual.get(idx)
+                if info:
+                    c["jarak_lurus_km"]     = info["jarak_lurus_km"]
+                    c["jarak_jalan_km"]     = info["jarak_jalan_km"]
+                    c["durasi_jalan_menit"] = info["durasi_jalan_menit"]
+                    c["jalan_tersedia"]     = info["jalan_tersedia"]
+
+    # ── Peringkat & status zonasi resmi: berbasis JARAK LURUS ────────
+    candidates.sort(key=lambda x: (x["jarak_lurus_km"] is None, x["jarak_lurus_km"] or 0))
+
     kuota   = school.kuota or 0
     result  = []
     for i, c in enumerate(candidates):
@@ -816,7 +1029,10 @@ def get_pendaftar_sekolah(db, sekolah_id: int):
             "alamat":    c["alamat"],
             "kecamatan": c["kecamatan"],
             "jenjang":   c["jenjang"],
-            "jarak_km":  c["jarak_km"],
+            "jarak_lurus_km":     c["jarak_lurus_km"],
+            "jarak_jalan_km":     c.get("jarak_jalan_km"),
+            "durasi_jalan_menit": c.get("durasi_jalan_menit"),
+            "jalan_tersedia":     c.get("jalan_tersedia", False),
             "status":    "Lolos" if rank <= kuota else "Tidak Lolos",
         })
     return result

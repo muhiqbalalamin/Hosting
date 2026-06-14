@@ -4,6 +4,7 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from db import SessionLocal
 
@@ -35,7 +36,7 @@ from crud import (
     get_school_by_npsn, get_school_by_id, get_schools,
     get_batasan_wilayah, get_batasan_wilayah_by_id,
     get_batasan_wilayah_geojson, get_batasan_wilayah_geojson_by_id,
-    get_zonasi, get_zonasi_by_id, get_simulasi_ppdb,
+    get_zonasi, get_zonasi_by_id, get_simulasi_ppdb, get_rekomendasi_sekolah,
     get_biaya, upsert_biaya,
     get_fasilitas, create_fasilitas, update_fasilitas, delete_fasilitas,
     create_school, update_school, delete_school,
@@ -45,7 +46,8 @@ from crud import (
     get_wilayah_kabupaten, get_wilayah_kecamatan,get_wilayah_kelurahan,
     get_pendaftar_sekolah,
 )
-from models import (School, SekolahBiaya, SekolahFasilitas)
+from models import (School, SekolahBiaya, SekolahFasilitas, UserProfile)
+from routing import get_distances_one_to_many, get_route_geometry
 
 router = APIRouter()
 
@@ -307,6 +309,54 @@ def map_zonasi(
 ):
     return get_zonasi(db, jenjang=jenjang, wilayah=wilayah)
 
+
+# ── Jarak via jalan untuk halaman Zonasi ──────────────────────────
+class JarakJalanRequest(BaseModel):
+    lat: float
+    lng: float
+    sekolah_ids: list[int]
+
+
+@router.post("/zonasi/jarak-jalan", response_model=dict)
+def zonasi_jarak_jalan(data: JarakJalanRequest, db: Session = Depends(get_db)):
+    """
+    Hitung jarak lurus DAN jarak via jalan dari satu titik (lokasi user)
+    ke beberapa sekolah. Dipanggil setelah penyaringan awal di frontend
+    (sekolah_ids sebaiknya sudah berupa kandidat yang sudah disaring, max ~50).
+
+    Hasil: { sekolah_id: { jarak_lurus_km, jarak_jalan_km, durasi_jalan_menit, jalan_tersedia } }
+    """
+    if not data.sekolah_ids:
+        return {}
+
+    schools = (
+        db.query(School)
+        .filter(School.sekolah_id.in_(data.sekolah_ids))
+        .filter(School.latitude.isnot(None), School.longitude.isnot(None))
+        .all()
+    )
+    destinations = [
+        {"sekolah_id": s.sekolah_id, "lat": s.latitude, "lng": s.longitude}
+        for s in schools
+    ]
+    return get_distances_one_to_many(db, data.lat, data.lng, destinations)
+
+
+# ── Geometri rute via jalan (untuk peta) ──────────────────────────
+@router.get("/rute-jalan", response_model=dict)
+def rute_jalan(
+    from_lat: float = Query(...),
+    from_lng: float = Query(...),
+    to_lat:   float = Query(...),
+    to_lng:   float = Query(...),
+):
+    """
+    Ambil geometri rute via jalan antara dua titik untuk digambar di peta.
+    Tidak butuh DB session — tidak di-cache (geometri jarang dipanggil ulang
+    untuk kombinasi titik yang sama persis).
+    """
+    return get_route_geometry(from_lat, from_lng, to_lat, to_lng)
+
 # ──────────────────────────────────────────────
 # SCHOOL — Create (Admin only)
 # ──────────────────────────────────────────────
@@ -414,6 +464,40 @@ def simulasi_ppdb(
             detail="Sekolah tidak ditemukan",
         )
     return result
+
+
+@router.get("/simulasi/rekomendasi/{user_id}")
+def simulasi_rekomendasi(
+    user_id: int,
+    anak_idx: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """
+    Top 10 rekomendasi sekolah berdasarkan profil anak (jarak rumah,
+    nilai rapor, prestasi) — dipakai di langkah awal Simulasi PPDB
+    sebelum Penilaian Diri.
+    """
+    profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profil tidak ditemukan")
+
+    try:
+        children = json.loads(profile.data_anak or "[]")
+    except (json.JSONDecodeError, TypeError):
+        children = []
+
+    if not isinstance(children, list) or anak_idx >= len(children):
+        raise HTTPException(status_code=400, detail="Data anak tidak ditemukan")
+
+    anak = children[anak_idx]
+    result = get_rekomendasi_sekolah(
+        db, profile.home_lat, profile.home_lng,
+        anak.get("jenjang") or "", anak.get("nilaiRapor"), anak.get("prestasi"),
+    )
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
 
 @router.get("/simulasi/cari-sekolah")
 def cari_sekolah_simulasi(

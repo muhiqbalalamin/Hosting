@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Float, ForeignKey, Integer, String, TIMESTAMP
+from sqlalchemy import Column, Float, ForeignKey, Integer, String, TIMESTAMP, UniqueConstraint
 from datetime import datetime
 from db import Base
 
@@ -139,3 +139,20 @@ class SekolahFasilitas(Base):
     kondisi    = Column(String, default="Baik")
     keterangan = Column(String, nullable=True)
     updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ── Cache jarak via jalan (OpenRouteService) ──────────────────────
+class JarakCache(Base):
+    __tablename__ = "jarak_cache"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    origin_lat   = Column(Float, nullable=False)   # dibulatkan 4 desimal (~11m)
+    origin_lng   = Column(Float, nullable=False)
+    sekolah_id   = Column(Integer, ForeignKey("sekolah.sekolah_id"), nullable=False)
+    jarak_meter  = Column(Float, nullable=False)
+    durasi_detik = Column(Float, nullable=True)
+    updated_at   = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("origin_lat", "origin_lng", "sekolah_id", name="uq_jarak_cache_origin_sekolah"),
+    )

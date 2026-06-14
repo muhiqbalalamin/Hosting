@@ -139,11 +139,18 @@ class SimulasiPeserta(BaseModel):
     peringkat:  int
     nama_anak:  str
     jenjang:    str
-    jarak_km:   float | None
+    jarak_lurus_km:     float | None
+    jarak_jalan_km:     float | None = None
+    durasi_jalan_menit: float | None = None
+    jalan_tersedia:     bool = False
     status:     str   # "Lolos" | "Tidak Lolos"
     is_me:      bool  # True jika ini adalah user yang sedang login
     kecamatan:  str | None   # ← tambah
     kelurahan:  str | None   # ← tambah
+    nilai_rapor:        float | None = None
+    skor_prestasi:      float | None = None
+    peringkat_prestasi: int   | None = None
+    status_prestasi:    str   | None = None
  
 class SimulasiResult(BaseModel):
     sekolah_id:      int
@@ -156,6 +163,10 @@ class SimulasiResult(BaseModel):
     status_sekolah:  str | None
     peringkat_saya:  int | None   # None jika user belum set lokasi / tidak mendaftar
     status_saya:     str | None
+    kuota_prestasi:          int | None = None
+    peringkat_prestasi_saya: int | None = None
+    status_prestasi_saya:    str | None = None
+    skor_prestasi_saya:      float | None = None
     total_pendaftar: int
     peserta:         list[SimulasiPeserta]
     
@@ -192,6 +203,9 @@ class PendaftarItem(BaseModel):
     alamat:     str | None
     kecamatan:  str | None
     jenjang:    str | None
-    jarak_km:   float | None
+    jarak_lurus_km:     float | None
+    jarak_jalan_km:     float | None = None
+    durasi_jalan_menit: float | None = None
+    jalan_tersedia:     bool = False
     status:     str            # Lolos / Tidak Lolos
     peringkat:  int

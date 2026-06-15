@@ -298,7 +298,7 @@ def map_schools(
         nama=nama,
         apply_sampling=False
     )
-    return schools
+    return schools["items"]
 
 
 @router.get("/map/zonasi", response_model=list[ZonasiResponse])

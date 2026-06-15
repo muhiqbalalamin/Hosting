@@ -296,7 +296,7 @@ def map_schools(
         kecamatan=kecamatan,
         status=status_filter,
         nama=nama,
-        apply_sampling=True   # ← sampling ON 09-06-2026
+        apply_sampling=False
     )
     return schools
 

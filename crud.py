@@ -96,6 +96,12 @@ def get_schools(
     where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
     if not apply_sampling:
+        from sqlalchemy import select
+            query = db.query(
+                School.sekolah_id, School.nama_sekolah, School.jenjang,
+                School.kecamatan, School.kabupaten, School.latitude, School.longitude,
+                School.status, School.alamat, School.kuota, School.daya_tampung, School.akreditasi
+            )
         # Query biasa tanpa sampling
         query = db.query(School)
         if jenjang:

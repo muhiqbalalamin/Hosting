@@ -666,7 +666,7 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
     }
 
 
-def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None):
+def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=None):
     from models import UserProfile
  
     school = db.query(School).filter(School.sekolah_id == sekolah_id).first()
@@ -701,6 +701,40 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None):
     seen_pairs = set()  # (user_id, nama_anak) agar tidak duplikat
 
     sekolah_jenjang = _norm_jenjang(school.jenjang or "")
+
+    def _make_candidate(profile, child):
+        """Bangun dict kandidat dari (profile, child). Return None jika data tidak lengkap."""
+        if profile.home_lat is None or profile.home_lng is None:
+            return None
+
+        dist_km = _haversine(
+            profile.home_lat, profile.home_lng,
+            school.latitude,  school.longitude,
+        )
+
+        # ── Jalur Prestasi: nilai rapor + poin prestasi ──────────
+        nilai_rapor = child.get("nilaiRapor")
+        try:
+            nilai_rapor = float(nilai_rapor) if nilai_rapor is not None else None
+        except (TypeError, ValueError):
+            nilai_rapor = None
+
+        poin_prestasi = _poin_prestasi_tertinggi(child.get("prestasi"))
+        skor_prestasi = round((nilai_rapor or 0) * 0.6 + poin_prestasi * 0.4, 2)
+
+        return {
+            "user_id":   profile.user_id,
+            "nama_anak": (child.get("nama") or "").strip() or "—",
+            "jenjang":   (child.get("jenjang") or "").strip() or "—",
+            "jarak_lurus_km": round(dist_km, 2),
+            "home_lat":  profile.home_lat,
+            "home_lng":  profile.home_lng,
+            "is_me":     profile.user_id == requesting_user_id,
+            "kecamatan": getattr(profile, "kecamatan", None) or "—",
+            "kelurahan": getattr(profile, "kelurahan", None) or "—",
+            "nilai_rapor":   nilai_rapor,
+            "skor_prestasi": skor_prestasi,
+        }
 
     for profile in profiles:
         if profile.home_lat is None or profile.home_lng is None:
@@ -737,35 +771,31 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None):
                 continue
             seen_pairs.add(pair_key)
 
-            dist_km = _haversine(
-                profile.home_lat, profile.home_lng,
-                school.latitude,  school.longitude,
-            )
-
-            # ── Jalur Prestasi: nilai rapor + poin prestasi ──────────
-            nilai_rapor = child.get("nilaiRapor")
-            try:
-                nilai_rapor = float(nilai_rapor) if nilai_rapor is not None else None
-            except (TypeError, ValueError):
-                nilai_rapor = None
-
-            poin_prestasi = _poin_prestasi_tertinggi(child.get("prestasi"))
-            skor_prestasi = round((nilai_rapor or 0) * 0.6 + poin_prestasi * 0.4, 2)
-
-            candidates.append({
-                "user_id":   profile.user_id,
-                "nama_anak": (child.get("nama") or "").strip() or "—",
-                "jenjang":   (child.get("jenjang") or "").strip() or "—",
-                "jarak_lurus_km": round(dist_km, 2),
-                "home_lat":  profile.home_lat,
-                "home_lng":  profile.home_lng,
-                "is_me":     profile.user_id == requesting_user_id,
-                "kecamatan": getattr(profile, "kecamatan", None) or "—",
-                "kelurahan": getattr(profile, "kelurahan", None) or "—",
-                "nilai_rapor":   nilai_rapor,
-                "skor_prestasi": skor_prestasi,
-            })
+            candidate = _make_candidate(profile, child)
+            if candidate is None:
+                continue
+            candidates.append(candidate)
             # Tidak break — biarkan anak lain dari user yg sama ikut jika ada
+
+    # ── Fallback: user memilih sekolah dari Top 10 Rekomendasi ───────
+    # Sekolah Top 10 dipilih berdasarkan jarak/skor, bukan dari
+    # sekolahTujuan — jadi user tidak akan masuk kandidat dari loop di
+    # atas. Kalau user belum ada di list, tambahkan anak mereka sekarang.
+    if requesting_user_id is not None and anak_idx is not None:
+        already_in = any(c["user_id"] == requesting_user_id for c in candidates)
+        if not already_in:
+            req_profile = db.query(UserProfile).filter(
+                UserProfile.user_id == requesting_user_id
+            ).first()
+            if req_profile and req_profile.data_anak:
+                try:
+                    req_children = json.loads(req_profile.data_anak)
+                    if isinstance(req_children, list) and anak_idx < len(req_children):
+                        c = _make_candidate(req_profile, req_children[anak_idx])
+                        if c is not None:
+                            candidates.append(c)
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
     # ── Peringkat & status zonasi resmi: berbasis JARAK LURUS ────────
     candidates.sort(key=lambda x: x["jarak_lurus_km"])

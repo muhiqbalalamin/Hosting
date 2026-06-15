@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from db import SessionLocal
 
 # ── Kode registrasi dari env variable (set di Railway Variables) ──
-ADMIN_CODE    = os.getenv("ADMIN_CODE")
-OPERATOR_CODE = os.getenv("OPERATOR_CODE")
+ADMIN_CODE    = os.getenv("ADMIN_CODE",    "ADM-JABAR-2026")
+OPERATOR_CODE = os.getenv("OPERATOR_CODE", "OPS-SEKOLAH-2026")
 
 # ── Guard sederhana untuk endpoint sensitif ──────────────────────
 def require_admin(x_role: str = Header(default="", alias="X-Role")):
@@ -298,7 +298,7 @@ def map_schools(
         nama=nama,
         apply_sampling=False
     )
-    return schools["items"]
+    return schools
 
 
 @router.get("/map/zonasi", response_model=list[ZonasiResponse])
@@ -445,24 +445,17 @@ def get_my_school(
 @router.get("/simulasi/ppdb/{sekolah_id}")
 def simulasi_ppdb(
     sekolah_id: int,
-    user_id: Optional[int] = Query(default=None),
+    user_id:   Optional[int] = Query(default=None),
+    anak_idx:  int           = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """
-    Simulasi PPDB Zonasi untuk sekolah tertentu.
- 
-    Query params:
-    - user_id (opsional): jika dikirim, baris user yang login akan
-      ditandai is_me=True dan peringkat_saya akan diisi.
- 
-    Response: SimulasiResult (lihat schemas.py)
-    """
-    result = get_simulasi_ppdb(db, sekolah_id, requesting_user_id=user_id)
+    result = get_simulasi_ppdb(
+        db, sekolah_id,
+        requesting_user_id=user_id,
+        anak_idx=anak_idx,
+    )
     if result is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Sekolah tidak ditemukan",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sekolah tidak ditemukan")
     return result
 
 

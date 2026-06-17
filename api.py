@@ -154,7 +154,7 @@ def list_users(db: Session = Depends(get_db)):
             "email":     u.email,
             "role":      u.role,
             "school_id": u.school_id,
-            "is_online": u.is_online,   # 09-05-2026
+            "is_online": u.is_online,  
         }
         for u in users
     ]
@@ -506,7 +506,11 @@ def simulasi_rekomendasi(
     anak = children[anak_idx]
     result = get_rekomendasi_sekolah(
         db, profile.home_lat, profile.home_lng,
-        anak.get("jenjang") or "", anak.get("nilaiRapor"), anak.get("prestasi"),
+        anak.get("jenjang") or "",
+        anak.get("nilaiRapor"),
+        anak.get("prestasi"),
+        nilai_tka=anak.get("nilaiTKA"),
+        pakai_tka=anak.get("pakaiTKA", True),
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])

@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from db import SessionLocal
 
 # ── Kode registrasi dari env variable (set di Railway Variables) ──
-ADMIN_CODE    = os.getenv("ADMIN_CODE")
-OPERATOR_CODE = os.getenv("OPERATOR_CODE")
+ADMIN_CODE    = os.getenv("ADMIN_CODE",    "ADM-JABAR-2026")
+OPERATOR_CODE = os.getenv("OPERATOR_CODE", "OPS-SEKOLAH-2026")
 
 # ── Guard sederhana untuk endpoint sensitif ──────────────────────
 def require_admin(x_role: str = Header(default="", alias="X-Role")):
@@ -37,6 +37,7 @@ from crud import (
     get_batasan_wilayah, get_batasan_wilayah_by_id,
     get_batasan_wilayah_geojson, get_batasan_wilayah_geojson_by_id,
     get_zonasi, get_zonasi_by_id, get_simulasi_ppdb, get_rekomendasi_sekolah,
+    get_sekolah_dalam_radius,
     get_biaya, upsert_biaya,
     get_fasilitas, create_fasilitas, update_fasilitas, delete_fasilitas,
     create_school, update_school, delete_school,
@@ -309,6 +310,26 @@ def map_zonasi(
 ):
     return get_zonasi(db, jenjang=jenjang, wilayah=wilayah)
 
+
+# ── Sekolah dalam radius (untuk halaman Zonasi) ───────────────────
+@router.get("/map/zonasi-schools", response_model=list[SchoolMapResponse])
+def map_zonasi_schools(
+    lat:       float           = Query(...),
+    lng:       float           = Query(...),
+    radius_km: float           = Query(5.0, ge=0.1, le=50.0),
+    extra_km:  float           = Query(5.0, ge=0.0, le=20.0),
+    jenjang:   Optional[str]   = Query(default=None),
+    nama:      Optional[str]   = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """
+    Kembalikan sekolah dalam (radius_km + extra_km) dari koordinat user.
+    Jauh lebih sedikit datanya dibanding /map/schools — ideal untuk Zonasi.
+    """
+    schools = get_sekolah_dalam_radius(
+        db, lat, lng, radius_km, extra_km, jenjang=jenjang, nama=nama
+    )
+    return schools
 
 # ── Jarak via jalan untuk halaman Zonasi ──────────────────────────
 class JarakJalanRequest(BaseModel):

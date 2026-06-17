@@ -553,6 +553,42 @@ def _poin_prestasi_tertinggi(prestasi_list) -> int:
     return poin
 
 
+def get_sekolah_dalam_radius(db: Session, lat: float, lng: float,
+                             radius_km: float, extra_km: float = 5.0,
+                             jenjang: str | None = None,
+                             nama: str | None = None) -> list:
+    """
+    Kembalikan sekolah dalam jarak (radius_km + extra_km) dari titik pusat.
+    Pakai bounding box dulu (murah di DB), lalu saring Haversine di Python.
+    Ini jauh lebih cepat dari mengirim 8000+ sekolah ke browser lalu filter di sana.
+    """
+    max_km    = radius_km + extra_km
+    lat_delta = max_km / 111.0
+    lng_delta = max_km / (111.0 * max(math.cos(math.radians(lat)), 0.1))
+
+    q = (
+        db.query(School)
+        .filter(School.latitude.isnot(None), School.longitude.isnot(None))
+        .filter(School.latitude.between(lat - lat_delta, lat + lat_delta))
+        .filter(School.longitude.between(lng - lng_delta, lng + lng_delta))
+    )
+    if jenjang:
+        q = q.filter(School.jenjang.ilike(jenjang))
+    if nama:
+        q = q.filter(School.nama_sekolah.ilike(f"%{nama}%"))
+
+    rows = q.all()
+
+    # Filter Haversine presisi di Python
+    result = []
+    for s in rows:
+        d = _haversine(lat, lng, s.latitude, s.longitude)
+        if d <= max_km:
+            result.append(s)
+
+    return result
+
+
 # ── Rekomendasi Sekolah: radius zona per jenjang ──────────────────
 DEFAULT_RADIUS_KM = {"SD": 3, "SMP": 5, "SMA": 8, "SMK": 8}
 MAX_RADIUS_KM     = 15   # batas maksimum absolut, walau radius zonasi > ini

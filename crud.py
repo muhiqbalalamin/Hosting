@@ -539,6 +539,8 @@ TINGKAT_POIN_PRESTASI = {
     "sekolah":   25,
 }
 
+# Skala TKA: 0–100 (disederhanakan untuk simulasi)
+TKA_MAX = 100
 
 def _poin_prestasi_tertinggi(prestasi_list) -> int:
     """Ambil poin tertinggi dari semua prestasi yang diinput (skala 0-100)."""
@@ -551,6 +553,43 @@ def _poin_prestasi_tertinggi(prestasi_list) -> int:
         tingkat = (p.get("tingkat") or "").strip().lower()
         poin = max(poin, TINGKAT_POIN_PRESTASI.get(tingkat, 0))
     return poin
+
+
+def _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_penghargaan, pakai_tka: bool) -> dict:
+    """
+    Hitung semua skor SPMB sesuai aturan resmi:
+
+    Dengan TKA:
+      skor_rapor_tka  = TNR × 40% + TKA × 60%   (skor utama jalur rapor)
+      skor_prestasi   = TKA × 70% + Penghargaan × 30%
+
+    Tanpa TKA:
+      skor_rapor_tka  = TNR × 60% + Penghargaan × 40%
+      skor_prestasi   = skor_rapor_tka (sama, tidak ada TKA)
+
+    Return dict:
+      skor_spmb       : skor utama yang dipakai untuk ranking jalur rapor
+      skor_prestasi   : skor untuk jalur prestasi
+      skor_akademik   : alias skor_spmb (dipakai di Skor Kelayakan Top 10)
+    """
+    tnr   = float(nilai_rapor or 0)
+    tka   = float(nilai_tka or 0) if nilai_tka is not None else None
+    poin  = float(poin_penghargaan or 0)
+
+    if pakai_tka and tka is not None:
+        skor_spmb     = round(tnr * 0.40 + tka * 0.60, 2)
+        skor_prestasi = round(tka * 0.70 + poin * 0.30, 2)
+    else:
+        # Tanpa TKA: rapor 60% + penghargaan 40%
+        skor_spmb     = round(tnr * 0.60 + poin * 0.40, 2)
+        skor_prestasi = skor_spmb
+
+    return {
+        "skor_spmb":     skor_spmb,
+        "skor_prestasi": skor_prestasi,
+        "skor_akademik": skor_spmb,   # alias untuk Skor Kelayakan rekomendasi
+        "pakai_tka":     pakai_tka and tka is not None,
+    }
 
 
 def get_sekolah_dalam_radius(db: Session, lat: float, lng: float,
@@ -595,7 +634,8 @@ MAX_RADIUS_KM     = 15   # batas maksimum absolut, walau radius zonasi > ini
 
 
 def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
-                             jenjang_anak: str, nilai_rapor, prestasi_list):
+                             jenjang_anak: str, nilai_rapor, prestasi_list,
+                             nilai_tka=None, pakai_tka=True):
     """
     Cari Top 10 sekolah dengan Skor Kelayakan tertinggi untuk anak ini.
 
@@ -613,7 +653,7 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
     if home_lat is None or home_lng is None:
         return {"error": "Lokasi rumah belum diisi di profil"}
 
-    # ── Tentukan radius pencarian dari tabel Zonasi (fallback default) ──
+    # ── Radius dari tabel Zonasi (fallback default) ──
     radius_km = DEFAULT_RADIUS_KM.get(jenjang_norm, 8)
     for z in db.query(Zonasi).all():
         nz = (z.nama_zonasi or "").upper()
@@ -622,7 +662,6 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
             break
     radius_km = min(radius_km, MAX_RADIUS_KM)
 
-    # ── Bounding box query (mempersempit sebelum hitung haversine) ──
     lat_delta = radius_km / 111.0
     lng_delta = radius_km / (111.0 * max(math.cos(math.radians(home_lat)), 0.1))
 
@@ -634,14 +673,21 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
         .all()
     )
 
-    # ── Skor akademik (konstan untuk anak ini) ──────────────────────
+    # ── Skor SPMB (konstant untuk anak ini) ─────────────────────────
     try:
         nilai_rapor_f = float(nilai_rapor) if nilai_rapor is not None else None
     except (TypeError, ValueError):
         nilai_rapor_f = None
 
-    poin_prestasi = _poin_prestasi_tertinggi(prestasi_list)
-    skor_akademik = round((nilai_rapor_f or 0) * 0.6 + poin_prestasi * 0.4, 1)
+    try:
+        nilai_tka_f = float(nilai_tka) if nilai_tka is not None else None
+    except (TypeError, ValueError):
+        nilai_tka_f = None
+
+    poin_prestasi  = _poin_prestasi_tertinggi(prestasi_list)
+    pakai_tka_bool = bool(pakai_tka) and nilai_tka_f is not None
+    skor_dict = _hitung_skor_spmb(nilai_rapor_f, nilai_tka_f, poin_prestasi, pakai_tka_bool)
+    skor_akademik = skor_dict["skor_akademik"]
 
     results = []
     for s in rows:
@@ -695,8 +741,11 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
         "jenjang":        jenjang_norm,
         "radius_km":      radius_km,
         "nilai_rapor":    nilai_rapor_f,
+        "nilai_tka":      nilai_tka_f,
+        "pakai_tka":      pakai_tka_bool,
         "poin_prestasi":  poin_prestasi,
         "skor_akademik":  skor_akademik,
+        "skor_spmb":      skor_dict["skor_spmb"],
         "total_kandidat": len(results),
         "rekomendasi":    top10,
     }
@@ -748,15 +797,22 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
             school.latitude,  school.longitude,
         )
 
-        # ── Jalur Prestasi: nilai rapor + poin prestasi ──────────
+        # ── Skor SPMB (jalur rapor) dan jalur prestasi ──────────
         nilai_rapor = child.get("nilaiRapor")
         try:
             nilai_rapor = float(nilai_rapor) if nilai_rapor is not None else None
         except (TypeError, ValueError):
             nilai_rapor = None
 
+        nilai_tka   = child.get("nilaiTKA")
+        try:
+            nilai_tka = float(nilai_tka) if nilai_tka is not None else None
+        except (TypeError, ValueError):
+            nilai_tka = None
+
+        pakai_tka    = bool(child.get("pakaiTKA", True))
         poin_prestasi = _poin_prestasi_tertinggi(child.get("prestasi"))
-        skor_prestasi = round((nilai_rapor or 0) * 0.6 + poin_prestasi * 0.4, 2)
+        skor_dict     = _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_prestasi, pakai_tka)
 
         return {
             "user_id":   profile.user_id,
@@ -769,7 +825,10 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
             "kecamatan": getattr(profile, "kecamatan", None) or "—",
             "kelurahan": getattr(profile, "kelurahan", None) or "—",
             "nilai_rapor":   nilai_rapor,
-            "skor_prestasi": skor_prestasi,
+            "nilai_tka":     nilai_tka,
+            "pakai_tka":     skor_dict["pakai_tka"],
+            "skor_spmb":     skor_dict["skor_spmb"],
+            "skor_prestasi": skor_dict["skor_prestasi"],
         }
 
     for profile in profiles:
@@ -854,9 +913,9 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
 
     kuota          = school.kuota or 0
 
-    # ── Jalur Prestasi: ranking berdasarkan skor (nilai rapor + prestasi) ──
-    # Kuota jalur prestasi diasumsikan 20% dari kuota total (min. 1 jika kuota>0),
-    # mengikuti proporsi umum jalur prestasi pada PPDB.
+    # ── Jalur Prestasi: ranking berdasarkan skor_prestasi ────────────
+    # skor_prestasi sudah dihitung per kandidat oleh _make_candidate
+    # menggunakan _hitung_skor_spmb (TKA×70%+Penghargaan×30% atau rapor×60%+penghargaan×40%)
     kuota_prestasi = max(1, round(kuota * 0.2)) if kuota else 0
 
     candidates_by_prestasi = sorted(candidates, key=lambda x: x["skor_prestasi"], reverse=True)
@@ -893,6 +952,9 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
             "kecamatan": c["kecamatan"],
             "kelurahan": c["kelurahan"],
             "nilai_rapor":        c.get("nilai_rapor"),
+            "nilai_tka":          c.get("nilai_tka"),
+            "pakai_tka":          c.get("pakai_tka", False),
+            "skor_spmb":          c.get("skor_spmb"),
             "skor_prestasi":      c.get("skor_prestasi"),
             "peringkat_prestasi": c.get("peringkat_prestasi"),
             "status_prestasi":    c.get("status_prestasi"),
@@ -915,6 +977,7 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
         "peringkat_prestasi_saya": peringkat_prestasi_saya,
         "status_prestasi_saya":    status_prestasi_saya,
         "skor_prestasi_saya":      skor_prestasi_saya,
+        "skor_spmb_saya":          next((c.get("skor_spmb") for c in candidates if c["is_me"]), None),
         "total_pendaftar": len(candidates),
         "peserta":         peserta,
     }

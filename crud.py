@@ -560,7 +560,7 @@ def _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_penghargaan, pakai_tka: bool)
     Hitung semua skor SPMB sesuai aturan resmi:
 
     Dengan TKA:
-      skor_rapor_tka  = TNR × 40% + TKA × 60%   (skor utama jalur rapor)
+      skor_rapor_tka  = TNR × 50% + TKA × 50%   (skor utama jalur rapor)
       skor_prestasi   = TKA × 70% + Penghargaan × 30%
 
     Tanpa TKA:
@@ -577,7 +577,7 @@ def _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_penghargaan, pakai_tka: bool)
     poin  = float(poin_penghargaan or 0)
 
     if pakai_tka and tka is not None:
-        skor_spmb     = round(tnr * 0.40 + tka * 0.60, 2)
+        skor_spmb     = round(tnr * 0.50 + tka * 0.50, 2)
         skor_prestasi = round(tka * 0.70 + poin * 0.30, 2)
     else:
         # Tanpa TKA: rapor 60% + penghargaan 40%

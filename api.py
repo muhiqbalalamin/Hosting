@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from db import SessionLocal
 
 # ── Kode registrasi dari env variable (set di Railway Variables) ──
-ADMIN_CODE    = os.getenv("ADMIN_CODE",    "ADM-JABAR-2026")
-OPERATOR_CODE = os.getenv("OPERATOR_CODE", "OPS-SEKOLAH-2026")
+ADMIN_CODE    = os.getenv("ADMIN_CODE")
+OPERATOR_CODE = os.getenv("OPERATOR_CODE")
 
 # ── Guard sederhana untuk endpoint sensitif ──────────────────────
 def require_admin(x_role: str = Header(default="", alias="X-Role")):

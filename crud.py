@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from models import BatasanWilayah, School, User, Zonasi
+from models import BatasanWilayah, School, SekolahBiaya, User, Zonasi
 from utils import hash_password, verify_password
 from typing import Optional
 from sqlalchemy import text
@@ -65,8 +65,9 @@ def get_schools(
     status: str | None = None,
     nama: str | None = None,
     apply_sampling: bool = False,
-    page: int | None = None,     # ← pagination
-    limit: int = 100,            # ← default 100 per halaman
+    page: int | None = None,
+    limit: int = 100,
+    biaya_max: int | None = None,   # ← filter biaya masuk maks (Rp)
 ):
     # Limit per jenjang per kabupaten
     LIMITS = {
@@ -106,6 +107,17 @@ def get_schools(
             query = query.filter(School.status.ilike(status))
         if nama:
             query = query.filter(School.nama_sekolah.ilike(f"%{nama}%"))
+        if biaya_max:
+            # JOIN ke sekolah_biaya untuk filter biaya masuk
+            query = (
+                query
+                .join(SekolahBiaya, SekolahBiaya.sekolah_id == School.sekolah_id, isouter=True)
+                .filter(
+                    text(f"COALESCE(sekolah_biaya.gedung,0) + COALESCE(sekolah_biaya.seragam,0) + "
+                         f"COALESCE(sekolah_biaya.buku,0) <= :bmax")
+                )
+                .params(bmax=biaya_max)
+            )
         query = query.order_by(School.nama_sekolah.asc())
         total = query.count()
         if page is not None:
@@ -115,18 +127,26 @@ def get_schools(
             items  = query.all()
         return {"items": items, "total": total}
 
-    # ── Sampling dengan CTE + ROW_NUMBER ──────────────────────────
+    # ── Sampling dengan CTE + ROW_NUMBER + LEFT JOIN biaya ────────
+    # Filter biaya tambahan pada WHERE jika diminta
+    biaya_having = ""
+    if biaya_max:
+        params["biaya_max"] = biaya_max
+        biaya_having = "AND COALESCE(b.gedung,0) + COALESCE(b.seragam,0) + COALESCE(b.buku,0) <= :biaya_max"
+
     sql = text(f"""
         WITH classified AS (
-            SELECT *,
+            SELECT s.*,
+                COALESCE(b.gedung,0) + COALESCE(b.seragam,0) + COALESCE(b.buku,0) AS biaya_masuk,
                 CASE
-                    WHEN jenjang ILIKE 'SD%%' OR jenjang ILIKE 'MI%%'  THEN 'SD'
-                    WHEN jenjang ILIKE 'SMP%%' OR jenjang ILIKE 'MTS%%' OR jenjang ILIKE 'MT%%' THEN 'SMP'
-                    WHEN jenjang ILIKE 'SMA%%' OR jenjang ILIKE 'MA%%'  THEN 'SMA'
-                    WHEN jenjang ILIKE 'SMK%%'                           THEN 'SMK'
+                    WHEN s.jenjang ILIKE 'SD%%' OR s.jenjang ILIKE 'MI%%'  THEN 'SD'
+                    WHEN s.jenjang ILIKE 'SMP%%' OR s.jenjang ILIKE 'MTS%%' OR s.jenjang ILIKE 'MT%%' THEN 'SMP'
+                    WHEN s.jenjang ILIKE 'SMA%%' OR s.jenjang ILIKE 'MA%%'  THEN 'SMA'
+                    WHEN s.jenjang ILIKE 'SMK%%'                           THEN 'SMK'
                     ELSE 'OTHER'
                 END AS jenjang_group
-            FROM sekolah
+            FROM sekolah s
+            LEFT JOIN sekolah_biaya b ON b.sekolah_id = s.sekolah_id
             {where_sql}
         ),
         ranked AS (
@@ -137,10 +157,11 @@ def get_schools(
                 ) AS rn
             FROM classified
             WHERE jenjang_group != 'OTHER'
+            {biaya_having}
         )
         SELECT sekolah_id, nama_sekolah, npsn, jenjang, alamat,
                kecamatan, kabupaten, latitude, longitude,
-               kuota, daya_tampung, status, akreditasi
+               kuota, daya_tampung, status, akreditasi, biaya_masuk
         FROM ranked
         WHERE
             (jenjang_group = 'SD'  AND rn <= :lim_sd)  OR
@@ -159,13 +180,14 @@ def get_schools(
 
     rows = db.execute(sql, params).mappings().all()
 
-    # Konversi ke ORM object agar response_model tetap bekerja
+    # Konversi ke ORM object + simpan biaya_masuk sebagai atribut tambahan
     result = []
     for r in rows:
         s = School()
         for col in School.__table__.columns.keys():
             if col in r:
                 setattr(s, col, r[col])
+        s.biaya_masuk = r.get("biaya_masuk", 0) or 0
         result.append(s)
 
     return result        
@@ -560,7 +582,7 @@ def _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_penghargaan, pakai_tka: bool)
     Hitung semua skor SPMB sesuai aturan resmi:
 
     Dengan TKA:
-      skor_rapor_tka  = TNR × 50% + TKA × 50%   (skor utama jalur rapor)
+      skor_rapor_tka  = TNR × 40% + TKA × 60%   (skor utama jalur rapor)
       skor_prestasi   = TKA × 70% + Penghargaan × 30%
 
     Tanpa TKA:
@@ -577,7 +599,7 @@ def _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_penghargaan, pakai_tka: bool)
     poin  = float(poin_penghargaan or 0)
 
     if pakai_tka and tka is not None:
-        skor_spmb     = round(tnr * 0.50 + tka * 0.50, 2)
+        skor_spmb     = round(tnr * 0.40 + tka * 0.60, 2)
         skor_prestasi = round(tka * 0.70 + poin * 0.30, 2)
     else:
         # Tanpa TKA: rapor 60% + penghargaan 40%
@@ -709,7 +731,7 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
             "akreditasi":     s.akreditasi,
             "status":         s.status,
             "kuota":          s.kuota,
-            "daya_tampung":   s.daya_tampung,
+            "pendaftar":      s.pendaftar if hasattr(s, 'pendaftar') else 0,
             "lat":            s.latitude,
             "lng":            s.longitude,
             "jarak_lurus_km": round(dist_km, 2),

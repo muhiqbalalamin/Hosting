@@ -32,18 +32,19 @@ class SchoolResponse(BaseModel):
 
 
 class SchoolMapResponse(BaseModel):
-    sekolah_id: int
+    sekolah_id:   int
     nama_sekolah: str
-    jenjang: str | None = None
-    kecamatan: str | None = None
-    kabupaten:    str | None = None    # 09-05-2026
-    latitude: float | None = None
-    longitude: float | None = None
-    status: str | None = None
-    alamat: str | None = None
-    kuota: int | None = None
+    jenjang:      str | None = None
+    kecamatan:    str | None = None
+    kabupaten:    str | None = None
+    latitude:     float | None = None
+    longitude:    float | None = None
+    status:       str | None = None
+    alamat:       str | None = None
+    kuota:        int | None = None
     daya_tampung: int | None = None
-    akreditasi: str | None = None
+    akreditasi:   str | None = None
+    biaya_masuk:  int | None = None   # total uang masuk dari tabel sekolah_biaya
 
 
 class ZonasiResponse(BaseModel):

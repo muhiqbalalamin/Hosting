@@ -308,7 +308,7 @@ def map_schools(
         d = SchoolMapResponse.model_validate(s, from_attributes=True).model_dump()
         d["biaya_masuk"] = getattr(s, "biaya_masuk", None)
         result.append(d)
-    return result["items']
+    return result
 
 
 @router.get("/map/zonasi", response_model=list[ZonasiResponse])

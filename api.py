@@ -1,5 +1,6 @@
 import json
 import os
+import requests as _requests
 import re
 from typing import Optional
 
@@ -154,7 +155,7 @@ def list_users(db: Session = Depends(get_db)):
             "email":     u.email,
             "role":      u.role,
             "school_id": u.school_id,
-            "is_online": u.is_online,  
+            "is_online": u.is_online,   # 09-05-2026
         }
         for u in users
     ]
@@ -283,12 +284,13 @@ def batasan_wilayah_geojson_detail(boundary_id: int, db: Session = Depends(get_d
     return feature
 
 
-@router.get("/map/schools", response_model=list[SchoolMapResponse])
+@router.get("/map/schools")
 def map_schools(
-    jenjang: Optional[str] = Query(default=None),
-    kecamatan: Optional[str] = Query(default=None),
-    status_filter: Optional[str] = Query(default=None, alias="status"),
-    nama: Optional[str] = Query(default=None),
+    jenjang:      Optional[str] = Query(default=None),
+    kecamatan:    Optional[str] = Query(default=None),
+    status_filter:Optional[str] = Query(default=None, alias="status"),
+    nama:         Optional[str] = Query(default=None),
+    biaya_max:    Optional[int] = Query(default=None, description="Maks total biaya masuk (Rp)"),
     db: Session = Depends(get_db)
 ):
     schools = get_schools(
@@ -297,9 +299,16 @@ def map_schools(
         kecamatan=kecamatan,
         status=status_filter,
         nama=nama,
-        apply_sampling=False
+        apply_sampling=False,
+        biaya_max=biaya_max,
     )
-    return schools["items"]
+    # Serialize manual agar biaya_masuk (atribut dinamis) ikut terkirim
+    result = []
+    for s in schools:
+        d = SchoolMapResponse.model_validate(s, from_attributes=True).model_dump()
+        d["biaya_masuk"] = getattr(s, "biaya_masuk", None)
+        result.append(d)
+    return result["items']
 
 
 @router.get("/map/zonasi", response_model=list[ZonasiResponse])
@@ -643,3 +652,82 @@ def remove_fasilitas(fasilitas_id: int, db: Session = Depends(get_db)):
 @router.get("/schools/{sekolah_id}/pendaftar")
 def list_pendaftar(sekolah_id: int, db: Session = Depends(get_db)):
     return get_pendaftar_sekolah(db, sekolah_id)
+
+# ── Fetch nilai TKA otomatis dari portal SPMB resmi ──────────────
+# URL portal dikonfigurasi via env var SPMB_API_URL di Railway.
+# Jika belum diset, auto-fetch tidak tersedia dan user input manual.
+_SPMB_API_URL = os.getenv("SPMB_API_URL", "")
+
+@router.get("/tka/fetch")
+def fetch_tka_otomatis(
+    nomor_peserta: str = Query(..., description="Nomor peserta dari portal SPMB resmi"),
+    npsn: Optional[str] = Query(default=None, description="NPSN sekolah asal (opsional)"),
+):
+    """
+    Ambil nilai TKA secara otomatis dari portal SPMB Jabar.
+    Membutuhkan env var SPMB_API_URL yang mengarah ke endpoint API resmi.
+
+    Response:
+      { success: bool, nilai_tka: float|null, sumber: str, pesan: str }
+    """
+    if not _SPMB_API_URL:
+        return {
+            "success":   False,
+            "nilai_tka": None,
+            "sumber":    "manual",
+            "pesan":     "API SPMB belum dikonfigurasi. Silakan input nilai TKA secara manual.",
+        }
+
+    try:
+        # Coba beberapa pola URL yang umum dipakai portal SPMB/PPDB daerah
+        urls_to_try = [
+            f"{_SPMB_API_URL.rstrip('/')}/api/peserta/{nomor_peserta}",
+            f"{_SPMB_API_URL.rstrip('/')}/peserta?nomor={nomor_peserta}",
+            f"{_SPMB_API_URL.rstrip('/')}/nilai?nomor_peserta={nomor_peserta}",
+        ]
+        if npsn:
+            urls_to_try.insert(0, f"{_SPMB_API_URL.rstrip('/')}/api/peserta/{nomor_peserta}?npsn={npsn}")
+
+        last_err = None
+        for url in urls_to_try:
+            try:
+                resp = _requests.get(url, timeout=8, headers={"Accept": "application/json"})
+                if not resp.ok:
+                    continue
+                data = resp.json()
+                # Coba berbagai key yang mungkin dipakai portal SPMB
+                nilai = (
+                    data.get("nilai_tka")
+                    or data.get("nilai_tes")
+                    or data.get("nilai_terstandar")
+                    or data.get("score")
+                    or data.get("nilai")
+                    or (data.get("data") or {}).get("nilai_tka")
+                    or (data.get("data") or {}).get("nilai_tes")
+                )
+                if nilai is not None:
+                    return {
+                        "success":   True,
+                        "nilai_tka": round(float(nilai), 2),
+                        "sumber":    "otomatis",
+                        "pesan":     f"Nilai TKA berhasil diambil untuk nomor peserta {nomor_peserta}.",
+                    }
+            except Exception as e:
+                last_err = str(e)
+                continue
+
+        return {
+            "success":   False,
+            "nilai_tka": None,
+            "sumber":    "manual",
+            "pesan":     f"Nilai TKA tidak ditemukan untuk nomor peserta '{nomor_peserta}'. "
+                         "Pastikan nomor peserta benar, atau input nilai secara manual.",
+        }
+
+    except Exception as e:
+        return {
+            "success":   False,
+            "nilai_tka": None,
+            "sumber":    "manual",
+            "pesan":     f"Gagal menghubungi portal SPMB: {str(e)[:120]}. Silakan input manual.",
+        }

@@ -302,9 +302,12 @@ def map_schools(
         apply_sampling=False,
         biaya_max=biaya_max,
     )
+    # apply_sampling=False mengembalikan {"items": [...], "total": ...},
+    # bukan list langsung — ambil "items" dulu sebelum diserialisasi
+    items = schools["items"] if isinstance(schools, dict) else schools
     # Serialize manual agar biaya_masuk (atribut dinamis) ikut terkirim
     result = []
-    for s in schools:
+    for s in items:
         d = SchoolMapResponse.model_validate(s, from_attributes=True).model_dump()
         d["biaya_masuk"] = getattr(s, "biaya_masuk", None)
         result.append(d)

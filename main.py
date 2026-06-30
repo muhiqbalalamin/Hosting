@@ -11,7 +11,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://zonasisekolahjabar.netlify.app"],
+    allow_origins=["https://zonasisekolahjawabarat.netlify.app"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-Role", "X-User-Id"],

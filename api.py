@@ -46,7 +46,7 @@ from crud import (
     get_school_by_user, get_profile,
     upsert_profile, get_all_users,
     get_wilayah_kabupaten, get_wilayah_kecamatan,get_wilayah_kelurahan,
-    get_pendaftar_sekolah, get_ranking_sekolah,
+    get_pendaftar_sekolah, get_ranking_sekolah, get_riwayat_penerimaan,
 )
 from models import (School, SekolahBiaya, SekolahFasilitas, UserProfile)
 from routing import get_distances_one_to_many, get_route_geometry
@@ -665,9 +665,21 @@ def ranking_sekolah(
     limit: int = 30,
     db: Session = Depends(get_db),
 ):
-    """Papan Peringkat Sekolah (Home page) — dihitung live dari data
-    pendaftar simulasi platform kami, bukan dari sumber eksternal."""
+    """(Tidak lagi dipakai frontend Home — lihat /home/riwayat-penerimaan.
+    Dibiarkan aktif kalau-kalau mau dipakai lagi untuk konteks lain.)"""
     return get_ranking_sekolah(db, mode=mode, jenjang=jenjang, kabupaten=kabupaten, limit=limit)
+
+
+@router.get("/home/riwayat-penerimaan")
+def riwayat_penerimaan(
+    jenjang: str = "",
+    kabupaten: str = "",
+    db: Session = Depends(get_db),
+):
+    """Papan Peringkat (Home page) — data statis nilai ambang tahun
+    sebelumnya, diinput manual lewat Supabase Table Editor pada tabel
+    riwayat_penerimaan. Bukan dihitung otomatis dari simulasi."""
+    return get_riwayat_penerimaan(db, jenjang=jenjang, kabupaten=kabupaten)
 
 # ── Fetch nilai TKA otomatis dari portal SPMB resmi ──────────────
 # URL portal dikonfigurasi via env var SPMB_API_URL di Railway.

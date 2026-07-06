@@ -1187,3 +1187,110 @@ def get_pendaftar_sekolah(db, sekolah_id: int):
             "status":    "Lolos" if rank <= kuota else "Tidak Lolos",
         })
     return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# PAPAN PERINGKAT SEKOLAH (Home page)
+#
+# Tidak ada API resmi/eksternal yang menyediakan data nilai
+# penerimaan PPDB secara publik (sudah dicek: informasi-spmb.site
+# tidak punya API terbuka, dan spmb.jabarprov.go.id hanya bisa
+# diakses per-akun individual). Karena itu papan peringkat ini
+# dihitung LIVE dari data pendaftar simulasi di platform kami
+# sendiri — bukan klaim data resmi Dinas Pendidikan.
+#
+# mode="nilai" -> nilai ambang = skor SPMB pendaftar pada posisi
+#                 ke-kuota (setelah diurutkan dari skor tertinggi)
+# mode="jarak" -> jarak ambang = jarak pendaftar pada posisi
+#                 ke-kuota (setelah diurutkan dari jarak terdekat)
+# ═══════════════════════════════════════════════════════════════
+def get_ranking_sekolah(db, mode: str = "nilai", jenjang: str = "", kabupaten: str = "", limit: int = 30):
+    jenjang_key = _norm_jenjang(jenjang or "")
+
+    q = db.query(School)
+    if kabupaten:
+        q = q.filter(School.kabupaten == kabupaten)
+    schools = q.all()
+    if jenjang_key:
+        schools = [s for s in schools if _norm_jenjang(s.jenjang or "") == jenjang_key]
+
+    # ── Satu kali scan semua profil, kelompokkan kandidat per nama sekolah tujuan ──
+    per_sekolah: dict[str, list[dict]] = {}
+    for profile in db.query(UserProfile).all():
+        if profile.home_lat is None or profile.home_lng is None:
+            continue
+        if not profile.data_anak:
+            continue
+        try:
+            children = json.loads(profile.data_anak)
+            if not isinstance(children, list):
+                continue
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        for child in children:
+            raw = child.get("sekolahTujuan") or ""
+            tujuan_list = (
+                [t.strip().lower() for t in raw if t] if isinstance(raw, list)
+                else ([raw.strip().lower()] if raw.strip() else [])
+            )
+            if not tujuan_list:
+                continue
+
+            nilai_rapor = child.get("nilaiRapor")
+            try:
+                nilai_rapor = float(nilai_rapor) if nilai_rapor is not None else None
+            except (TypeError, ValueError):
+                nilai_rapor = None
+            nilai_tka = child.get("nilaiTKA")
+            try:
+                nilai_tka = float(nilai_tka) if nilai_tka is not None else None
+            except (TypeError, ValueError):
+                nilai_tka = None
+            pakai_tka     = bool(child.get("pakaiTKA", True))
+            poin_prestasi = _poin_prestasi_tertinggi(child.get("prestasi"))
+            skor_dict     = _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_prestasi, pakai_tka)
+
+            entry = {
+                "home_lat":     profile.home_lat,
+                "home_lng":     profile.home_lng,
+                "skor_spmb":    skor_dict["skor_spmb"],
+                "child_jenjang": _norm_jenjang(child.get("jenjang") or ""),
+            }
+            for nama_tujuan in tujuan_list:
+                per_sekolah.setdefault(nama_tujuan, []).append(entry)
+
+    # ── Hitung metrik ambang per sekolah ──
+    hasil = []
+    for s in schools:
+        key            = (s.nama_sekolah or "").strip().lower()
+        sekolah_jenjang = _norm_jenjang(s.jenjang or "")
+        kandidat = [
+            k for k in per_sekolah.get(key, [])
+            if not sekolah_jenjang or not k["child_jenjang"] or k["child_jenjang"] == sekolah_jenjang
+        ]
+        if not kandidat:
+            continue  # tidak ada data live — tidak bisa dirangking, lewati
+
+        kuota = s.kuota or 0
+        metric_val = None
+        if kuota > 0:
+            if mode == "jarak":
+                jaraks = sorted(_haversine(k["home_lat"], k["home_lng"], s.latitude, s.longitude) for k in kandidat)
+                metric_val = round(jaraks[min(kuota, len(jaraks)) - 1], 2)
+            else:
+                nilai_list = sorted((k["skor_spmb"] for k in kandidat), reverse=True)
+                metric_val = round(nilai_list[min(kuota, len(nilai_list)) - 1], 1)
+
+        hasil.append({
+            "sekolah_id":       s.sekolah_id,
+            "nama_sekolah":     s.nama_sekolah,
+            "kabupaten":        s.kabupaten,
+            "kecamatan":        s.kecamatan,
+            "kuota":            kuota,
+            "jumlah_pendaftar": len(kandidat),
+            "metric":           metric_val,
+        })
+
+    hasil.sort(key=lambda r: (r["metric"] is None, r["metric"]), reverse=(mode != "jarak"))
+    return {"mode": mode, "total_sekolah_live": len(hasil), "data": hasil[:limit]}

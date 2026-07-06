@@ -1252,9 +1252,12 @@ def get_ranking_sekolah(db, mode: str = "nilai", jenjang: str = "", kabupaten: s
             skor_dict     = _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_prestasi, pakai_tka)
 
             entry = {
-                "home_lat":     profile.home_lat,
-                "home_lng":     profile.home_lng,
-                "skor_spmb":    skor_dict["skor_spmb"],
+                "home_lat":      profile.home_lat,
+                "home_lng":      profile.home_lng,
+                "nilai_rapor":   nilai_rapor,
+                "nilai_tka":     nilai_tka,
+                "poin_prestasi": poin_prestasi,
+                "skor_spmb":     skor_dict["skor_spmb"],
                 "child_jenjang": _norm_jenjang(child.get("jenjang") or ""),
             }
             for nama_tujuan in tujuan_list:
@@ -1274,13 +1277,20 @@ def get_ranking_sekolah(db, mode: str = "nilai", jenjang: str = "", kabupaten: s
 
         kuota = s.kuota or 0
         metric_val = None
+        tnr_ambang = tka_ambang = penghargaan_ambang = None
         if kuota > 0:
             if mode == "jarak":
                 jaraks = sorted(_haversine(k["home_lat"], k["home_lng"], s.latitude, s.longitude) for k in kandidat)
                 metric_val = round(jaraks[min(kuota, len(jaraks)) - 1], 2)
             else:
-                nilai_list = sorted((k["skor_spmb"] for k in kandidat), reverse=True)
-                metric_val = round(nilai_list[min(kuota, len(nilai_list)) - 1], 1)
+                # urutkan kandidat LENGKAP (bukan cuma nilai skor_spmb-nya) supaya
+                # rincian TNR/TKA/Penghargaan di garis ambang bisa ikut diambil
+                kandidat_sorted = sorted(kandidat, key=lambda k: k["skor_spmb"], reverse=True)
+                cutoff = kandidat_sorted[min(kuota, len(kandidat_sorted)) - 1]
+                metric_val         = round(cutoff["skor_spmb"], 1)
+                tnr_ambang         = cutoff["nilai_rapor"]
+                tka_ambang         = cutoff["nilai_tka"]
+                penghargaan_ambang = cutoff["poin_prestasi"]
 
         hasil.append({
             "sekolah_id":       s.sekolah_id,
@@ -1288,6 +1298,9 @@ def get_ranking_sekolah(db, mode: str = "nilai", jenjang: str = "", kabupaten: s
             "kabupaten":        s.kabupaten,
             "kecamatan":        s.kecamatan,
             "kuota":            kuota,
+            "tnr_ambang":         round(tnr_ambang, 1) if tnr_ambang is not None else None,
+            "tka_ambang":         round(tka_ambang, 1) if tka_ambang is not None else None,
+            "penghargaan_ambang": penghargaan_ambang,
             "jumlah_pendaftar": len(kandidat),
             "metric":           metric_val,
         })

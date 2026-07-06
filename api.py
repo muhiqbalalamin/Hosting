@@ -46,7 +46,7 @@ from crud import (
     get_school_by_user, get_profile,
     upsert_profile, get_all_users,
     get_wilayah_kabupaten, get_wilayah_kecamatan,get_wilayah_kelurahan,
-    get_pendaftar_sekolah,
+    get_pendaftar_sekolah, get_ranking_sekolah,
 )
 from models import (School, SekolahBiaya, SekolahFasilitas, UserProfile)
 from routing import get_distances_one_to_many, get_route_geometry
@@ -655,6 +655,19 @@ def remove_fasilitas(fasilitas_id: int, db: Session = Depends(get_db)):
 @router.get("/schools/{sekolah_id}/pendaftar")
 def list_pendaftar(sekolah_id: int, db: Session = Depends(get_db)):
     return get_pendaftar_sekolah(db, sekolah_id)
+
+
+@router.get("/home/ranking")
+def ranking_sekolah(
+    mode: str = "nilai",       # "nilai" | "jarak"
+    jenjang: str = "",
+    kabupaten: str = "",
+    limit: int = 30,
+    db: Session = Depends(get_db),
+):
+    """Papan Peringkat Sekolah (Home page) — dihitung live dari data
+    pendaftar simulasi platform kami, bukan dari sumber eksternal."""
+    return get_ranking_sekolah(db, mode=mode, jenjang=jenjang, kabupaten=kabupaten, limit=limit)
 
 # ── Fetch nilai TKA otomatis dari portal SPMB resmi ──────────────
 # URL portal dikonfigurasi via env var SPMB_API_URL di Railway.

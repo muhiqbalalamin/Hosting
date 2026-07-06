@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from models import BatasanWilayah, School, SekolahBiaya, User, Zonasi
+from models import BatasanWilayah, School, SekolahBiaya, User, Zonasi, RiwayatPenerimaan
 from utils import hash_password, verify_password
 from typing import Optional
 from sqlalchemy import text
@@ -1307,3 +1307,46 @@ def get_ranking_sekolah(db, mode: str = "nilai", jenjang: str = "", kabupaten: s
 
     hasil.sort(key=lambda r: (r["metric"] is None, r["metric"]), reverse=(mode != "jarak"))
     return {"mode": mode, "total_sekolah_live": len(hasil), "data": hasil[:limit]}
+    # ── get_ranking_sekolah tidak lagi dipakai di Home page (lihat
+    #    get_riwayat_penerimaan di bawah) — dibiarkan, tidak dihapus,
+    #    kalau-kalau nanti mau dipakai lagi untuk konteks lain.
+
+
+# ═══════════════════════════════════════════════════════════════
+# RIWAYAT PENERIMAAN (Home page) — pengganti get_ranking_sekolah
+#
+# Bukan dihitung otomatis dari simulasi. Data statis yang diinput
+# manual (lewat Supabase Table Editor pada tabel riwayat_penerimaan,
+# tabelnya otomatis terbuat saat backend di-deploy karena models.py
+# sudah didaftarkan ke Base.metadata.create_all di main.py).
+# Ditampilkan gaya "kartu info" per sekolah, bukan tabel ranking.
+# ═══════════════════════════════════════════════════════════════
+def get_riwayat_penerimaan(db, jenjang: str = "", kabupaten: str = ""):
+    jenjang_key = _norm_jenjang(jenjang or "")
+
+    q = (
+        db.query(RiwayatPenerimaan, School)
+        .join(School, School.sekolah_id == RiwayatPenerimaan.sekolah_id)
+    )
+    if kabupaten:
+        q = q.filter(School.kabupaten == kabupaten)
+    rows = q.order_by(RiwayatPenerimaan.tahun.desc(), School.nama_sekolah.asc()).all()
+
+    hasil = []
+    for riwayat, s in rows:
+        if jenjang_key and _norm_jenjang(s.jenjang or "") != jenjang_key:
+            continue
+        hasil.append({
+            "sekolah_id":     s.sekolah_id,
+            "nama_sekolah":   s.nama_sekolah,
+            "jenjang":        s.jenjang,
+            "kabupaten":      s.kabupaten,
+            "kecamatan":      s.kecamatan,
+            "tahun":          riwayat.tahun,
+            "jalur":          riwayat.jalur,
+            "tnr_min":        riwayat.tnr_min,
+            "tka_min":        riwayat.tka_min,
+            "jarak_maks_km":  riwayat.jarak_maks_km,
+            "catatan":        riwayat.catatan,
+        })
+    return hasil

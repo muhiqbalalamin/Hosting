@@ -156,3 +156,22 @@ class JarakCache(Base):
     __table_args__ = (
         UniqueConstraint("origin_lat", "origin_lng", "sekolah_id", name="uq_jarak_cache_origin_sekolah"),
     )
+
+
+# ── Riwayat Penerimaan — nilai ambang tahun sebelumnya (statis) ───
+# Diinput manual (mis. lewat Supabase Table Editor, atau referensi
+# yang dibaca dari sumber publik seperti informasi-spmb.site),
+# BUKAN dihitung otomatis dari data simulasi. Dipakai untuk kartu
+# "Papan Peringkat" di Home page, gaya info/pengumuman per sekolah.
+class RiwayatPenerimaan(Base):
+    __tablename__ = "riwayat_penerimaan"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    sekolah_id    = Column(Integer, ForeignKey("sekolah.sekolah_id"), nullable=False)
+    tahun         = Column(Integer, nullable=False)
+    jalur         = Column(String, nullable=True)   # opsional, misal "Zonasi" / "Prestasi" — boleh kosong
+    tnr_min       = Column(Float, nullable=True)
+    tka_min       = Column(Float, nullable=True)
+    jarak_maks_km = Column(Float, nullable=True)
+    catatan       = Column(String, nullable=True)
+    updated_at    = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)

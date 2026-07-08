@@ -109,6 +109,26 @@ class ZonasiCreate(BaseModel):
  
 class ZonasiUpdate(ZonasiCreate):
     nama_zonasi: Optional[str] = None
+
+# --- Riwayat Penerimaan (Home page, data statis input admin) ---
+class RiwayatPenerimaanCreate(BaseModel):
+    sekolah_id:    int
+    tahun:         int
+    jalur:         Optional[str]   = None
+    tnr_min:       Optional[float] = None
+    tka_min:       Optional[float] = None
+    jarak_maks_km: Optional[float] = None
+    catatan:       Optional[str]   = None
+
+class RiwayatPenerimaanUpdate(BaseModel):
+    sekolah_id:    Optional[int]   = None
+    tahun:         Optional[int]   = None
+    jalur:         Optional[str]   = None
+    tnr_min:       Optional[float] = None
+    tka_min:       Optional[float] = None
+    jarak_maks_km: Optional[float] = None
+    catatan:       Optional[str]   = None
+
 # ─── Profile schemas ────────────────────────────────────────────
 class UserProfileSchema(BaseModel):
     nama:           Optional[str] = None

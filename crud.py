@@ -553,6 +553,24 @@ def _norm_jenjang(j: str) -> str:
     return ""
 
 
+def _norm_status(raw) -> str | None:
+    """
+    Normalisasi status kepemilikan sekolah ke kode kanonik 'N' (Negeri) /
+    'S' (Swasta). Data di DB tidak konsisten — sebagian tersimpan sebagai
+    huruf tunggal 'N'/'S' (input lewat form admin), sebagian sebagai kata
+    penuh 'Negeri'/'Swasta' (hasil import lama). Fungsi ini menerima
+    keduanya (case-insensitive). Mengembalikan None jika tidak dikenali/kosong.
+    """
+    if not raw:
+        return None
+    v = str(raw).strip().upper()
+    if v in ("N", "NEGERI"):
+        return "N"
+    if v in ("S", "SWASTA"):
+        return "S"
+    return None
+
+
 # ── Jalur Prestasi: bobot poin berdasarkan tingkat pencapaian ────
 TINGKAT_POIN_PRESTASI = {
     "nasional":  100,
@@ -736,7 +754,8 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
             "kecamatan":      s.kecamatan,
             "alamat":         s.alamat,
             "akreditasi":     s.akreditasi,
-            "status":         s.status,
+            "status":         _norm_status(s.status),   # dinormalisasi ke 'N'/'S'/None
+            "status_asli":    s.status,                 # nilai mentah dari DB, untuk keperluan debug/tampilan lain
             "kuota":          s.kuota,
             "pendaftar":      s.pendaftar if hasattr(s, 'pendaftar') else 0,
             "lat":            s.latitude,
@@ -807,7 +826,7 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
             "kecamatan":       school.kecamatan,
             "alamat":          school.alamat,
             "jenjang_sekolah": school.jenjang,
-            "status_sekolah":  school.status,
+            "status_sekolah":  _norm_status(school.status) or school.status,
             "school_lat":      None,
             "school_lng":      None,
             "peringkat_saya":  None,
@@ -1008,7 +1027,7 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
         "kecamatan":       school.kecamatan,
         "alamat":          school.alamat,
         "jenjang_sekolah": school.jenjang,
-        "status_sekolah":  school.status,
+        "status_sekolah":  _norm_status(school.status) or school.status,
         "school_lat":      school.latitude,    # ← untuk map di frontend
         "school_lng":      school.longitude,   # ← untuk map di frontend
         "peringkat_saya":  peringkat_saya,

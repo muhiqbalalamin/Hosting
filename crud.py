@@ -1337,6 +1337,7 @@ def get_riwayat_penerimaan(db, jenjang: str = "", kabupaten: str = ""):
         if jenjang_key and _norm_jenjang(s.jenjang or "") != jenjang_key:
             continue
         hasil.append({
+            "id":             riwayat.id,
             "sekolah_id":     s.sekolah_id,
             "nama_sekolah":   s.nama_sekolah,
             "jenjang":        s.jenjang,
@@ -1350,3 +1351,40 @@ def get_riwayat_penerimaan(db, jenjang: str = "", kabupaten: str = ""):
             "catatan":        riwayat.catatan,
         })
     return hasil
+
+
+def create_riwayat_penerimaan(db: Session, data) -> "RiwayatPenerimaan":
+    riwayat = RiwayatPenerimaan(
+        sekolah_id=data.sekolah_id,
+        tahun=data.tahun,
+        jalur=data.jalur,
+        tnr_min=data.tnr_min,
+        tka_min=data.tka_min,
+        jarak_maks_km=data.jarak_maks_km,
+        catatan=data.catatan,
+    )
+    db.add(riwayat)
+    db.commit()
+    db.refresh(riwayat)
+    return riwayat
+
+
+def update_riwayat_penerimaan(db: Session, riwayat_id: int, data) -> Optional["RiwayatPenerimaan"]:
+    riwayat = db.query(RiwayatPenerimaan).filter(RiwayatPenerimaan.id == riwayat_id).first()
+    if not riwayat:
+        return None
+    update_data = data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(riwayat, key, value)
+    db.commit()
+    db.refresh(riwayat)
+    return riwayat
+
+
+def delete_riwayat_penerimaan(db: Session, riwayat_id: int) -> bool:
+    riwayat = db.query(RiwayatPenerimaan).filter(RiwayatPenerimaan.id == riwayat_id).first()
+    if not riwayat:
+        return False
+    db.delete(riwayat)
+    db.commit()
+    return True

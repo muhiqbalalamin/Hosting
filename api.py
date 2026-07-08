@@ -28,6 +28,7 @@ from schemas import (
     SchoolResponse,ZonasiResponse,
     SchoolCreate, SchoolUpdate, 
     ZonasiCreate, ZonasiUpdate,
+    RiwayatPenerimaanCreate, RiwayatPenerimaanUpdate,
     BiayaUpsert,  BiayaResponse,
     FasilitasCreate, FasilitasResponse,
 )
@@ -47,6 +48,7 @@ from crud import (
     upsert_profile, get_all_users,
     get_wilayah_kabupaten, get_wilayah_kecamatan,get_wilayah_kelurahan,
     get_pendaftar_sekolah, get_ranking_sekolah, get_riwayat_penerimaan,
+    create_riwayat_penerimaan, update_riwayat_penerimaan, delete_riwayat_penerimaan,
 )
 from models import (School, SekolahBiaya, SekolahFasilitas, UserProfile)
 from routing import get_distances_one_to_many, get_route_geometry
@@ -677,9 +679,37 @@ def riwayat_penerimaan(
     db: Session = Depends(get_db),
 ):
     """Papan Peringkat (Home page) — data statis nilai ambang tahun
-    sebelumnya, diinput manual lewat Supabase Table Editor pada tabel
-    riwayat_penerimaan. Bukan dihitung otomatis dari simulasi."""
+    sebelumnya, diinput manual lewat Admin dashboard. Bukan dihitung
+    otomatis dari simulasi."""
     return get_riwayat_penerimaan(db, jenjang=jenjang, kabupaten=kabupaten)
+
+
+@router.post("/riwayat-penerimaan", response_model=dict, status_code=201)
+def create_riwayat_penerimaan_endpoint(
+    data: RiwayatPenerimaanCreate, db: Session = Depends(get_db), _=Depends(require_admin)
+):
+    r = create_riwayat_penerimaan(db, data)
+    return {"message": "Riwayat penerimaan berhasil ditambahkan", "id": r.id}
+
+
+@router.put("/riwayat-penerimaan/{riwayat_id}", response_model=dict)
+def update_riwayat_penerimaan_endpoint(
+    riwayat_id: int, data: RiwayatPenerimaanUpdate, db: Session = Depends(get_db), _=Depends(require_admin)
+):
+    r = update_riwayat_penerimaan(db, riwayat_id, data)
+    if not r:
+        raise HTTPException(status_code=404, detail="Riwayat penerimaan tidak ditemukan")
+    return {"message": "Riwayat penerimaan berhasil diperbarui", "id": r.id}
+
+
+@router.delete("/riwayat-penerimaan/{riwayat_id}", response_model=dict)
+def delete_riwayat_penerimaan_endpoint(
+    riwayat_id: int, db: Session = Depends(get_db), _=Depends(require_admin)
+):
+    deleted = delete_riwayat_penerimaan(db, riwayat_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Riwayat penerimaan tidak ditemukan")
+    return {"message": "Riwayat penerimaan berhasil dihapus"}
 
 # ── Fetch nilai TKA otomatis dari portal SPMB resmi ──────────────
 # URL portal dikonfigurasi via env var SPMB_API_URL di Railway.

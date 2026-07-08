@@ -582,7 +582,7 @@ def _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_penghargaan, pakai_tka: bool)
     Hitung semua skor SPMB sesuai aturan resmi:
 
     Dengan TKA:
-      skor_rapor_tka  = TNR × 40% + TKA × 60%   (skor utama jalur rapor)
+      skor_rapor_tka  = TNR × 50% + TKA × 50%   (skor utama jalur rapor)
       skor_prestasi   = TKA × 70% + Penghargaan × 30%
 
     Tanpa TKA:
@@ -599,7 +599,7 @@ def _hitung_skor_spmb(nilai_rapor, nilai_tka, poin_penghargaan, pakai_tka: bool)
     poin  = float(poin_penghargaan or 0)
 
     if pakai_tka and tka is not None:
-        skor_spmb     = round(tnr * 0.40 + tka * 0.60, 2)
+        skor_spmb     = round(tnr * 0.50 + tka * 0.50, 2)
         skor_prestasi = round(tka * 0.70 + poin * 0.30, 2)
     else:
         # Tanpa TKA: rapor 60% + penghargaan 40%
@@ -937,7 +937,7 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
 
     # ── Jalur Prestasi: ranking berdasarkan skor_prestasi ────────────
     # skor_prestasi sudah dihitung per kandidat oleh _make_candidate
-    # menggunakan _hitung_skor_spmb (TKA×70%+Penghargaan×30% atau rapor×60%+penghargaan×40%)
+    # menggunakan _hitung_skor_spmb (TKA×70%+Penghargaan×30% atau rapor×60%+penghargaan×40%; jalur rapor+TKA: TNR×50%+TKA×50%)
     kuota_prestasi = max(1, round(kuota * 0.2)) if kuota else 0
 
     candidates_by_prestasi = sorted(candidates, key=lambda x: x["skor_prestasi"], reverse=True)

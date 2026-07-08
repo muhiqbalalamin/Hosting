@@ -659,11 +659,18 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
                              jenjang_anak: str, nilai_rapor, prestasi_list,
                              nilai_tka=None, pakai_tka=True):
     """
-    Cari Top 10 sekolah dengan Skor Kelayakan tertinggi untuk anak ini.
+    Cari Top 10 sekolah NEGERI dan Top 10 sekolah SWASTA dengan Skor
+    Kelayakan tertinggi untuk anak ini (total maks. 20 rekomendasi).
 
     Skor Kelayakan = Skor Jarak * 0.7 + Skor Akademik * 0.3
-      - Skor Jarak: 100 jika jarak=0, menurun linear ke 0 di radius zona
-      - Skor Akademik: nilai_rapor * 0.6 + poin_prestasi * 0.4
+      - Skor Jarak     : 100 jika jarak=0, menurun linear ke 0 di radius zona
+      - Skor Akademik  : sama dengan skor_spmb Jalur Rapor, yaitu
+                         TNR × 50% + TKA × 50% (atau TNR × 60% + Penghargaan × 40%
+                         jika TKA tidak dipakai) — lihat _hitung_skor_spmb().
+                         Nilainya SAMA untuk setiap sekolah karena merepresentasikan
+                         kesiapan akademik anak itu sendiri, bukan sesuatu yang
+                         spesifik per sekolah. Yang membedakan urutan antar sekolah
+                         murni Skor Jarak (kedekatan domisili).
 
     Radius pencarian mengikuti tabel Zonasi (admin-configurable) untuk
     jenjang terkait, dibatasi maksimum MAX_RADIUS_KM.
@@ -741,16 +748,23 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
         })
 
     results.sort(key=lambda x: x["skor_kelayakan"], reverse=True)
-    top10 = results[:10]
+    top10_negeri = [r for r in results if r["status"] == "N"][:10]
+    top10_swasta = [r for r in results if r["status"] == "S"][:10]
+    top10 = results[:10]   # dipertahankan untuk kompatibilitas mundur (gabungan tanpa filter status)
 
-    # ── Jarak via jalan untuk Top 10 saja (1 panggilan ORS, hemat kuota) ──
-    if top10:
+    # ── Jarak via jalan untuk gabungan sekolah yang tampil saja (hemat kuota ORS) ──
+    union_by_id = {}
+    for r in (top10_negeri + top10_swasta + top10):
+        union_by_id[r["sekolah_id"]] = r
+    union_list = list(union_by_id.values())
+
+    if union_list:
         destinations = [
             {"sekolah_id": r["sekolah_id"], "lat": r["lat"], "lng": r["lng"]}
-            for r in top10
+            for r in union_list
         ]
         dual = get_distances_one_to_many(db, home_lat, home_lng, destinations)
-        for r in top10:
+        for r in union_list:
             info = dual.get(r["sekolah_id"])
             if info:
                 r["jarak_jalan_km"]     = info["jarak_jalan_km"]
@@ -760,16 +774,20 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
             r.pop("lng", None)
 
     return {
-        "jenjang":        jenjang_norm,
-        "radius_km":      radius_km,
-        "nilai_rapor":    nilai_rapor_f,
-        "nilai_tka":      nilai_tka_f,
-        "pakai_tka":      pakai_tka_bool,
-        "poin_prestasi":  poin_prestasi,
-        "skor_akademik":  skor_akademik,
-        "skor_spmb":      skor_dict["skor_spmb"],
-        "total_kandidat": len(results),
-        "rekomendasi":    top10,
+        "jenjang":             jenjang_norm,
+        "radius_km":           radius_km,
+        "nilai_rapor":         nilai_rapor_f,
+        "nilai_tka":           nilai_tka_f,
+        "pakai_tka":           pakai_tka_bool,
+        "poin_prestasi":       poin_prestasi,
+        "skor_akademik":       skor_akademik,
+        "skor_spmb":           skor_dict["skor_spmb"],
+        "total_kandidat":      len(results),
+        "total_kandidat_negeri": sum(1 for r in results if r["status"] == "N"),
+        "total_kandidat_swasta": sum(1 for r in results if r["status"] == "S"),
+        "rekomendasi":         top10,           # gabungan (kompatibilitas mundur)
+        "rekomendasi_negeri":  top10_negeri,
+        "rekomendasi_swasta":  top10_swasta,
     }
 
 

@@ -170,6 +170,8 @@ class RiwayatPenerimaan(Base):
     sekolah_id    = Column(Integer, ForeignKey("sekolah.sekolah_id"), nullable=False)
     tahun         = Column(Integer, nullable=False)
     jalur         = Column(String, nullable=True)   # opsional, misal "Zonasi" / "Prestasi" — boleh kosong
+    kuota         = Column(Integer, nullable=True)  # kuota pada tahun tsb (bisa beda dari sekolah.kuota saat ini)
+    pendaftar     = Column(Integer, nullable=True)  # jumlah pendaftar pada tahun tsb — dasar hitung Persaingan
     tnr_min       = Column(Float, nullable=True)
     tka_min       = Column(Float, nullable=True)
     jarak_maks_km = Column(Float, nullable=True)

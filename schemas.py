@@ -19,6 +19,7 @@ class LoginSchema(BaseModel):
 class SchoolResponse(BaseModel):
     sekolah_id: int
     nama_sekolah: str | None = None
+    npsn: str | None = None
     jenjang: str | None = None
     alamat: str | None = None
     kecamatan: str | None = None
@@ -90,6 +91,7 @@ class SchoolCreate(BaseModel):
     jenjang:      Optional[str] = None
     alamat:       Optional[str] = None
     kecamatan:    Optional[str] = None
+    kabupaten:    Optional[str] = None
     latitude:     Optional[float] = None
     longitude:    Optional[float] = None
     kuota:        Optional[int] = None

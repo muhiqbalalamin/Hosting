@@ -1424,10 +1424,17 @@ def get_riwayat_penerimaan(db, jenjang: str = "", kabupaten: str = "", include_e
     )
     if kabupaten:
         q = q.filter(School.kabupaten == kabupaten)
-    rows = (
-        q.order_by(RiwayatPenerimaan.tahun.desc().nullslast(), School.nama_sekolah.asc())
-         .all()
-    )
+    q = q.order_by(RiwayatPenerimaan.tahun.desc().nullslast(), School.nama_sekolah.asc())
+    if not kabupaten:
+        # ── Batas pengaman: tanpa filter kabupaten, query ini menarik
+        # SEMUA sekolah se-Jawa Barat (bisa ribuan baris lintas jenjang)
+        # sekaligus — itu penyebab utama load lambat di Home page.
+        # Begitu user memilih kabupaten tertentu, jumlah barisnya wajar
+        # (paling ratusan) jadi TIDAK dibatasi. Urutan query (data asli
+        # dulu via tahun.desc().nullslast()) memastikan sekolah yang
+        # sudah punya data riwayat tetap diprioritaskan tampil duluan.
+        q = q.limit(300)
+    rows = q.all()
 
     hasil = []
     for s, riwayat in rows:

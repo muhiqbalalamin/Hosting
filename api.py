@@ -676,12 +676,19 @@ def ranking_sekolah(
 def riwayat_penerimaan(
     jenjang: str = "",
     kabupaten: str = "",
+    include_empty: bool = True,
     db: Session = Depends(get_db),
 ):
     """Papan Peringkat (Home page) — data statis nilai ambang tahun
     sebelumnya, diinput manual lewat Admin dashboard. Bukan dihitung
-    otomatis dari simulasi."""
-    return get_riwayat_penerimaan(db, jenjang=jenjang, kabupaten=kabupaten)
+    otomatis dari simulasi.
+
+    include_empty=True (default, Home page publik): semua sekolah
+    ditampilkan walau belum ada input riwayat sama sekali, kolom yang
+    datanya sudah ada di tabel sekolah (mis. kuota) ikut terisi.
+    include_empty=False (Admin CRUD panel): hanya baris riwayat yang
+    sungguh sudah diinput, supaya `id` selalu valid untuk Edit/Hapus."""
+    return get_riwayat_penerimaan(db, jenjang=jenjang, kabupaten=kabupaten, include_empty=include_empty)
 
 
 @router.post("/riwayat-penerimaan", response_model=dict, status_code=201)

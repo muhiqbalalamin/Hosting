@@ -690,8 +690,10 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
                          spesifik per sekolah. Yang membedakan urutan antar sekolah
                          murni Skor Jarak (kedekatan domisili).
 
-    Radius pencarian mengikuti tabel Zonasi (admin-configurable) untuk
-    jenjang terkait, dibatasi maksimum MAX_RADIUS_KM.
+    Radius pencarian pakai default tetap per jenjang (SD 3km, SMP 5km,
+    SMA/SMK 8km) — TIDAK mengikuti tabel Zonasi admin, karena radius
+    zonasi cuma relevan untuk penentuan Jalur Zonasi (lihat get_simulasi_ppdb),
+    bukan untuk seberapa luas pool rekomendasi Jalur Prestasi/Rapor di sini.
     """
     jenjang_norm = _norm_jenjang(jenjang_anak)
     if not jenjang_norm:
@@ -700,14 +702,14 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
     if home_lat is None or home_lng is None:
         return {"error": "Lokasi rumah belum diisi di profil"}
 
-    # ── Radius dari tabel Zonasi (fallback default) ──
-    radius_km = DEFAULT_RADIUS_KM.get(jenjang_norm, 8)
-    for z in db.query(Zonasi).all():
-        nz = (z.nama_zonasi or "").upper()
-        if jenjang_norm in nz and z.radius_meter:
-            radius_km = z.radius_meter / 1000
-            break
-    radius_km = min(radius_km, MAX_RADIUS_KM)
+    # ── Radius pencarian: default tetap per jenjang (SD 3km, SMP 5km,
+    # SMA/SMK 8km), TIDAK mengikuti radius Zonasi yang di-set admin.
+    # Radius Zonasi admin itu representasi aturan Jalur Zonasi saja —
+    # kalau dipakai di sini juga, rekomendasi jadi ikut sempit padahal
+    # Jalur Prestasi/Rapor pada praktiknya tidak dibatasi radius zonasi.
+    # (get_simulasi_ppdb/Step 2-3 tidak memakai radius ini sama sekali —
+    # jadi keputusan Jalur Zonasi yang sesungguhnya tidak terpengaruh.)
+    radius_km = min(DEFAULT_RADIUS_KM.get(jenjang_norm, 8), MAX_RADIUS_KM)
 
     lat_delta = radius_km / 111.0
     lng_delta = radius_km / (111.0 * max(math.cos(math.radians(home_lat)), 0.1))
@@ -801,6 +803,7 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
         "poin_prestasi":       poin_prestasi,
         "skor_akademik":       skor_akademik,
         "skor_spmb":           skor_dict["skor_spmb"],
+        "skor_prestasi":       skor_dict["skor_prestasi"],
         "total_kandidat":      len(results),
         "total_kandidat_negeri": sum(1 for r in results if r["status"] == "N"),
         "total_kandidat_swasta": sum(1 for r in results if r["status"] == "S"),
@@ -888,6 +891,7 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
             "pakai_tka":     skor_dict["pakai_tka"],
             "skor_spmb":     skor_dict["skor_spmb"],
             "skor_prestasi": skor_dict["skor_prestasi"],
+            "poin_prestasi": poin_prestasi,   # dipakai utk filter kelayakan Jalur Prestasi
         }
 
     for profile in profiles:
@@ -975,12 +979,23 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
     # ── Jalur Prestasi: ranking berdasarkan skor_prestasi ────────────
     # skor_prestasi sudah dihitung per kandidat oleh _make_candidate
     # menggunakan _hitung_skor_spmb (TKA×70%+Penghargaan×30% atau rapor×60%+penghargaan×40%; jalur rapor+TKA: TNR×50%+TKA×50%)
+    #
+    # PENTING: kandidat yang poin_prestasi=0 (belum/sudah tidak punya
+    # prestasi/sertifikat sama sekali) TIDAK diikutkan dalam ranking ini,
+    # walau skor_prestasi-nya tetap > 0 murni dari komponen TKA (bobot
+    # 70%). Jalur Prestasi secara definisi untuk pendaftar yang punya
+    # bukti prestasi — tanpa itu mereka tidak berhak dirangking/"Lolos"
+    # di jalur ini, berapa pun nilai TKA-nya.
     kuota_prestasi = max(1, round(kuota * 0.2)) if kuota else 0
 
-    candidates_by_prestasi = sorted(candidates, key=lambda x: x["skor_prestasi"], reverse=True)
+    kandidat_prestasi_valid = [c for c in candidates if c.get("poin_prestasi", 0) > 0]
+    candidates_by_prestasi = sorted(kandidat_prestasi_valid, key=lambda x: x["skor_prestasi"], reverse=True)
     for i, c in enumerate(candidates_by_prestasi):
         c["peringkat_prestasi"] = i + 1
         c["status_prestasi"] = "Lolos" if c["peringkat_prestasi"] <= kuota_prestasi else "Tidak Lolos"
+    # Kandidat tanpa prestasi: c["peringkat_prestasi"]/c["status_prestasi"]
+    # sengaja tidak diset sama sekali → tetap None saat diakses lewat
+    # c.get(...) di bawah, ditampilkan frontend sebagai "tidak berlaku".
 
     peserta        = []
     peringkat_saya = None
@@ -1015,6 +1030,7 @@ def get_simulasi_ppdb(db, sekolah_id: int, requesting_user_id=None, anak_idx=Non
             "pakai_tka":          c.get("pakai_tka", False),
             "skor_spmb":          c.get("skor_spmb"),
             "skor_prestasi":      c.get("skor_prestasi"),
+            "poin_prestasi":      c.get("poin_prestasi", 0),
             "peringkat_prestasi": c.get("peringkat_prestasi"),
             "status_prestasi":    c.get("status_prestasi"),
         })
@@ -1358,36 +1374,80 @@ def get_ranking_sekolah(db, mode: str = "nilai", jenjang: str = "", kabupaten: s
 # sudah didaftarkan ke Base.metadata.create_all di main.py).
 # Ditampilkan gaya "kartu info" per sekolah, bukan tabel ranking.
 # ═══════════════════════════════════════════════════════════════
-def get_riwayat_penerimaan(db, jenjang: str = "", kabupaten: str = ""):
+def get_riwayat_penerimaan(db, jenjang: str = "", kabupaten: str = "", include_empty: bool = True):
     jenjang_key = _norm_jenjang(jenjang or "")
 
+    if not include_empty:
+        # ── Dipakai Admin CRUD panel: hanya baris riwayat yang sungguh
+        #    sudah diinput, supaya daftar tetap ringkas dan `id` selalu
+        #    valid untuk aksi Edit/Hapus.
+        q = (
+            db.query(RiwayatPenerimaan, School)
+            .join(School, School.sekolah_id == RiwayatPenerimaan.sekolah_id)
+        )
+        if kabupaten:
+            q = q.filter(School.kabupaten == kabupaten)
+        rows = q.order_by(RiwayatPenerimaan.tahun.desc(), School.nama_sekolah.asc()).all()
+
+        hasil = []
+        for riwayat, s in rows:
+            if jenjang_key and _norm_jenjang(s.jenjang or "") != jenjang_key:
+                continue
+            hasil.append({
+                "id":             riwayat.id,
+                "sekolah_id":     s.sekolah_id,
+                "nama_sekolah":   s.nama_sekolah,
+                "jenjang":        s.jenjang,
+                "kabupaten":      s.kabupaten,
+                "kecamatan":      s.kecamatan,
+                "tahun":          riwayat.tahun,
+                "jalur":          riwayat.jalur,
+                "kuota":          riwayat.kuota if riwayat.kuota is not None else s.kuota,
+                "pendaftar":      riwayat.pendaftar,
+                "tnr_min":        riwayat.tnr_min,
+                "tka_min":        riwayat.tka_min,
+                "jarak_maks_km":  riwayat.jarak_maks_km,
+                "catatan":        riwayat.catatan,
+            })
+        return hasil
+
+    # ── Dipakai Home page publik (default): SEMUA sekolah ditampilkan,
+    #    walau belum ada satupun data riwayat diinput. Basis query jadi
+    #    tabel `sekolah` (LEFT JOIN ke riwayat_penerimaan) sehingga
+    #    kolom yang datanya sudah ada di tabel sekolah (mis. kuota)
+    #    langsung terisi, sementara kolom historis yang memang belum
+    #    ada datanya (pendaftar, TNR/TKA minimum, jarak maksimum)
+    #    dikirim null — ditampilkan "Belum Tersedia" oleh frontend.
     q = (
-        db.query(RiwayatPenerimaan, School)
-        .join(School, School.sekolah_id == RiwayatPenerimaan.sekolah_id)
+        db.query(School, RiwayatPenerimaan)
+        .outerjoin(RiwayatPenerimaan, RiwayatPenerimaan.sekolah_id == School.sekolah_id)
     )
     if kabupaten:
         q = q.filter(School.kabupaten == kabupaten)
-    rows = q.order_by(RiwayatPenerimaan.tahun.desc(), School.nama_sekolah.asc()).all()
+    rows = (
+        q.order_by(RiwayatPenerimaan.tahun.desc().nullslast(), School.nama_sekolah.asc())
+         .all()
+    )
 
     hasil = []
-    for riwayat, s in rows:
+    for s, riwayat in rows:
         if jenjang_key and _norm_jenjang(s.jenjang or "") != jenjang_key:
             continue
         hasil.append({
-            "id":             riwayat.id,
+            "id":             riwayat.id if riwayat else None,
             "sekolah_id":     s.sekolah_id,
             "nama_sekolah":   s.nama_sekolah,
             "jenjang":        s.jenjang,
             "kabupaten":      s.kabupaten,
             "kecamatan":      s.kecamatan,
-            "tahun":          riwayat.tahun,
-            "jalur":          riwayat.jalur,
-            "kuota":          riwayat.kuota,
-            "pendaftar":      riwayat.pendaftar,
-            "tnr_min":        riwayat.tnr_min,
-            "tka_min":        riwayat.tka_min,
-            "jarak_maks_km":  riwayat.jarak_maks_km,
-            "catatan":        riwayat.catatan,
+            "tahun":          riwayat.tahun if riwayat else None,
+            "jalur":          riwayat.jalur if riwayat else None,
+            "kuota":          (riwayat.kuota if riwayat and riwayat.kuota is not None else s.kuota),
+            "pendaftar":      riwayat.pendaftar if riwayat else None,
+            "tnr_min":        riwayat.tnr_min if riwayat else None,
+            "tka_min":        riwayat.tka_min if riwayat else None,
+            "jarak_maks_km":  riwayat.jarak_maks_km if riwayat else None,
+            "catatan":        riwayat.catatan if riwayat else None,
         })
     return hasil
 

@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from models import BatasanWilayah, School, SekolahBiaya, User, Zonasi, RiwayatPenerimaan
 from utils import hash_password, verify_password
 from typing import Optional
-from sqlalchemy import text
+from sqlalchemy import text, func, case
 import json
 import math
 from routing import get_distances_many_to_one, get_distances_one_to_many, haversine_km
@@ -1411,12 +1411,15 @@ def get_riwayat_penerimaan(db, jenjang: str = "", kabupaten: str = "", include_e
             })
         return hasil
 
-    # ── Dipakai Home page publik (default): SEMUA sekolah ditampilkan,
-    #    walau belum ada satupun data riwayat diinput. Basis query jadi
-    #    tabel `sekolah` (LEFT JOIN ke riwayat_penerimaan) sehingga
-    #    kolom yang datanya sudah ada di tabel sekolah (mis. kuota)
-    #    langsung terisi, sementara kolom historis yang memang belum
-    #    ada datanya (pendaftar, TNR/TKA minimum, jarak maksimum)
+    # ── Dipakai Home page publik (default): SEMUA sekolah ditampilkan
+    #    (Negeri MAUPUN Swasta), walau belum ada satupun data riwayat
+    #    diinput. Negeri diprioritaskan tampil duluan (lihat negeri_rank
+    #    di order_by di bawah) — bukan disembunyikan, cuma diurutkan
+    #    lebih dulu karena itu yang paling relevan utk mayoritas user.
+    #    Basis query jadi tabel `sekolah` (LEFT JOIN ke riwayat_penerimaan)
+    #    sehingga kolom yang datanya sudah ada di tabel sekolah (mis.
+    #    kuota) langsung terisi, sementara kolom historis yang memang
+    #    belum ada datanya (pendaftar, TNR/TKA minimum, jarak maksimum)
     #    dikirim null — ditampilkan "Belum Tersedia" oleh frontend.
     q = (
         db.query(School, RiwayatPenerimaan)
@@ -1424,7 +1427,13 @@ def get_riwayat_penerimaan(db, jenjang: str = "", kabupaten: str = "", include_e
     )
     if kabupaten:
         q = q.filter(School.kabupaten == kabupaten)
-    q = q.order_by(RiwayatPenerimaan.tahun.desc().nullslast(), School.nama_sekolah.asc())
+    # Status di DB tidak konsisten ('N' vs 'Negeri'), jadi dicek dua-duanya.
+    # negeri_rank 0 = Negeri (tampil duluan), 1 = selain itu (Swasta/kosong).
+    negeri_rank = case(
+        (func.upper(School.status).in_(("N", "NEGERI")), 0),
+        else_=1,
+    )
+    q = q.order_by(negeri_rank, RiwayatPenerimaan.tahun.desc().nullslast(), School.nama_sekolah.asc())
     if not kabupaten:
         # ── Batas pengaman: tanpa filter kabupaten, query ini menarik
         # SEMUA sekolah se-Jawa Barat (bisa ribuan baris lintas jenjang)

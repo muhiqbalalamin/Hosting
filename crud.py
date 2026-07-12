@@ -58,6 +58,13 @@ def logout_user(db: Session, user_id: int):
         db.commit()
 
 # 09-05-2026
+def get_school_count(db: Session) -> int:
+    """Hitung total sekolah terdaftar — dipakai badge statistik di Home
+    page ("Sekolah Terdaftar"). Sengaja jadi query terpisah & seringan
+    mungkin (murni COUNT, tidak ikut fetch baris data sekolah)."""
+    return db.query(School).count()
+
+
 def get_schools(
     db: Session,
     jenjang: str | None = None,
@@ -387,11 +394,11 @@ def create_school(db: Session, data) -> "School":
     result = db.execute(
         text("""
             INSERT INTO sekolah 
-                (nama_sekolah, npsn, jenjang, alamat, kecamatan,
+                (nama_sekolah, npsn, jenjang, alamat, kecamatan, kabupaten,
                  latitude, longitude, location,
                  kuota, daya_tampung, status, akreditasi)
             VALUES 
-                (:nama_sekolah, :npsn, :jenjang, :alamat, :kecamatan,
+                (:nama_sekolah, :npsn, :jenjang, :alamat, :kecamatan, :kabupaten,
                  :latitude, :longitude,
                  ST_SetSRID(ST_Point(:longitude, :latitude), 4326)::geography,
                  :kuota, :daya_tampung, :status, :akreditasi)
@@ -403,6 +410,7 @@ def create_school(db: Session, data) -> "School":
             "jenjang":      data.jenjang,
             "alamat":       data.alamat,
             "kecamatan":    data.kecamatan,
+            "kabupaten":    data.kabupaten,
             "latitude":     data.latitude,
             "longitude":    data.longitude,
             "kuota":        data.kuota,

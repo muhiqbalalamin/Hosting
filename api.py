@@ -35,7 +35,7 @@ from schemas import (
 from crud import (
     UserAlreadyExistsError,
     authenticate_user, logout_user, create_user,
-    get_school_by_npsn, get_school_by_id, get_schools,
+    get_school_by_npsn, get_school_by_id, get_schools, get_school_count,
     get_batasan_wilayah, get_batasan_wilayah_by_id,
     get_batasan_wilayah_geojson, get_batasan_wilayah_geojson_by_id,
     get_zonasi, get_zonasi_by_id, get_simulasi_ppdb, get_rekomendasi_sekolah,
@@ -284,6 +284,13 @@ def batasan_wilayah_geojson_detail(boundary_id: int, db: Session = Depends(get_d
             detail="data batasan wilayah tidak ditemukan"
         )
     return feature
+
+
+@router.get("/schools/count")
+def schools_count(db: Session = Depends(get_db)):
+    """Total sekolah terdaftar di DB — dipakai badge statistik Home page
+    supaya angkanya akurat & otomatis ikut update, bukan teks statis."""
+    return {"total": get_school_count(db)}
 
 
 @router.get("/map/schools")

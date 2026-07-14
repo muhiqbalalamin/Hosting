@@ -3,6 +3,7 @@ import os
 import requests as _requests
 import re
 from typing import Optional
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -34,7 +35,7 @@ from schemas import (
 )
 from crud import (
     UserAlreadyExistsError,
-    authenticate_user, logout_user, create_user,
+    authenticate_user, logout_user, create_user, touch_last_seen, admin_deactivate_user, ONLINE_THRESHOLD_MINUTES,
     get_school_by_npsn, get_school_by_id, get_schools, get_school_count,
     get_batasan_wilayah, get_batasan_wilayah_by_id,
     get_batasan_wilayah_geojson, get_batasan_wilayah_geojson_by_id,
@@ -146,9 +147,33 @@ def logout(user_id: int = Body(..., embed=True), db: Session = Depends(get_db)):
     return {"message": "Logout berhasil"}
 
 
+@router.post("/auth/heartbeat")
+def heartbeat(user_id: int = Body(..., embed=True), db: Session = Depends(get_db)):
+    """Dipanggil berkala oleh frontend selama sesi user masih terbuka
+    (lihat setInterval di main.js) — dasar penentuan status 'Aktif' yang
+    akurat di Manajemen Pengguna (Admin), bukan cuma is_online mentah
+    yang bisa basi kalau user nutup tab tanpa logout."""
+    ok = touch_last_seen(db, user_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="User tidak ditemukan")
+    return {"message": "ok"}
+
+
+@router.post("/users/{user_id}/deactivate", dependencies=[Depends(require_admin)])
+def deactivate_user_route(user_id: int, db: Session = Depends(get_db)):
+    """Admin memaksa akun jadi Tidak Aktif (force-logout) — tombol
+    'Nonaktifkan' di Manajemen Pengguna."""
+    user = admin_deactivate_user(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User tidak ditemukan")
+    return {"message": f"{user.username} berhasil dinonaktifkan"}
+
+
 @router.get("/users")
 def list_users(db: Session = Depends(get_db)):
     """Daftar semua pengguna terdaftar."""
+    ambang = datetime.utcnow() - timedelta(minutes=ONLINE_THRESHOLD_MINUTES)
+
     users = get_all_users(db)
     return [
         {
@@ -157,7 +182,11 @@ def list_users(db: Session = Depends(get_db)):
             "email":     u.email,
             "role":      u.role,
             "school_id": u.school_id,
-            "is_online": u.is_online,   # 09-05-2026
+            # Status "benar-benar aktif": is_online=1 DAN heartbeat
+            # terakhirnya masih dalam ambang waktu — supaya user yang
+            # nutup tab tanpa logout tidak nyangkut selamanya "Aktif".
+            "is_online": bool(u.is_online) and u.last_seen is not None and u.last_seen >= ambang,
+            "last_seen": u.last_seen.isoformat() if u.last_seen else None,
         }
         for u in users
     ]

@@ -14,6 +14,7 @@ class User(Base):
     school_id = Column(Integer, ForeignKey("sekolah.sekolah_id"), nullable=True)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
     is_online     = Column(Integer, default=0)  # 0 = non-aktif, 1 = aktif
+    last_seen     = Column(TIMESTAMP, nullable=True)  # diupdate tiap login & heartbeat berkala dari frontend — dasar penentuan status "benar-benar sedang aktif" (bukan cuma is_online mentah yang bisa basi kalau user nutup tab tanpa logout)
 
 
 # ── Profil data untuk user umum ─────────────────────────────────

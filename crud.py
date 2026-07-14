@@ -3,9 +3,17 @@ from models import BatasanWilayah, School, SekolahBiaya, User, Zonasi, RiwayatPe
 from utils import hash_password, verify_password
 from typing import Optional
 from sqlalchemy import text, func, case
+from datetime import datetime, timedelta
 import json
 import math
 from routing import get_distances_many_to_one, get_distances_one_to_many, haversine_km
+
+# Ambang waktu utk dianggap "benar-benar sedang aktif" — is_online=1 mentah
+# gampang basi (user nutup tab tanpa klik Keluar, is_online tetap 1
+# selamanya). Dianggap aktif kalau heartbeat terakhirnya masih dalam
+# rentang ini; lebih lama dari itu dianggap Tidak Aktif walau is_online
+# masih 1 di DB.
+ONLINE_THRESHOLD_MINUTES = 10
 
 class UserAlreadyExistsError(Exception):
     pass
@@ -47,6 +55,7 @@ def authenticate_user(db: Session, email, password):
         return None
     # Set online saat login
     user.is_online = 1
+    user.last_seen = datetime.utcnow()
     db.commit()
     db.refresh(user)
     return user
@@ -56,6 +65,37 @@ def logout_user(db: Session, user_id: int):
     if user:
         user.is_online = 0
         db.commit()
+
+
+def touch_last_seen(db: Session, user_id: int) -> bool:
+    """Heartbeat — dipanggil berkala oleh frontend selama sesi user masih
+    terbuka, supaya status 'Aktif' di Manajemen Pengguna (Admin) benar-benar
+    merefleksikan siapa yang SEDANG memakai aplikasi, bukan cuma sekadar
+    'pernah login dan belum sempat klik Keluar'."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return False
+    user.last_seen = datetime.utcnow()
+    if not user.is_online:
+        user.is_online = 1
+    db.commit()
+    return True
+
+
+def admin_deactivate_user(db: Session, user_id: int) -> Optional[User]:
+    """Admin memaksa akun jadi Tidak Aktif (force-logout) — dipakai tombol
+    'Nonaktifkan' di Manajemen Pengguna. User yang bersangkutan akan
+    dianggap logout; kalau ingin memakai aplikasi lagi, dia perlu login
+    ulang (sesi/localStorage di sisi browser tidak otomatis kehapus,
+    tapi panggilan API berikutnya akan diperlakukan sebagai tidak aktif)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return None
+    user.is_online = 0
+    user.last_seen = None
+    db.commit()
+    db.refresh(user)
+    return user
 
 # 09-05-2026
 def get_school_count(db: Session) -> int:
@@ -681,6 +721,29 @@ DEFAULT_RADIUS_KM = {"SD": 3, "SMP": 5, "SMA": 8, "SMK": 8}
 MAX_RADIUS_KM     = 15   # batas maksimum absolut, walau radius zonasi > ini
 
 
+def _persen_ambang(nilai_aktual, ambang, arah):
+    """
+    Hitung persentase posisi relatif nilai_aktual terhadap ambang
+    historis (riwayat_penerimaan tahun lalu) — dasar "Estimasi Peluang"
+    yang lebih bisa dipertanggungjawabkan drpd skor buatan sendiri,
+    karena dibandingkan ke DATA RIIL penerimaan sekolah tsb, bukan cuma
+    rasio jarak/radius pencarian.
+
+    arah='min': makin BESAR nilai_aktual dibanding ambang, makin baik
+                (mis. TNR anak vs tnr_min tahun lalu — di atas ambang = aman)
+    arah='max': makin KECIL nilai_aktual dibanding ambang, makin baik
+                (mis. jarak anak vs jarak_maks_km tahun lalu)
+
+    Hasil dirancang: rasio=1 (persis di ambang) → 50%, dua kali lebih
+    baik dari ambang → mendekati 100%, dua kali lebih buruk → mendekati 0%.
+    """
+    if ambang is None or ambang <= 0 or nilai_aktual is None:
+        return None
+    rasio = nilai_aktual / ambang
+    persen = (50 * rasio) if arah == 'min' else (100 - 50 * rasio)
+    return max(0, min(100, round(persen)))
+
+
 def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
                              jenjang_anak: str, nilai_rapor, prestasi_list,
                              nilai_tka=None, pakai_tka=True):
@@ -786,6 +849,47 @@ def get_rekomendasi_sekolah(db: Session, home_lat: float, home_lng: float,
     for r in (top10_negeri + top10_swasta + top10):
         union_by_id[r["sekolah_id"]] = r
     union_list = list(union_by_id.values())
+
+    if union_list:
+        # ── Estimasi Peluang: pakai ambang HISTORIS (riwayat_penerimaan)
+        # kalau tersedia — lebih bisa dipertanggungjawabkan drpd skor_jarak
+        # mentah, karena dibandingkan ke data penerimaan riil tahun lalu,
+        # bukan cuma rasio jarak/radius. Fallback ke estimasi umum untuk
+        # sekolah yg belum ada data historisnya (lengkap: tnr_min DAN
+        # jarak_maks_km) — supaya tidak semua sekolah kehilangan estimasi
+        # cuma karena datanya belum diinput admin.
+        sekolah_ids = [r["sekolah_id"] for r in union_list]
+        riwayat_rows = (
+            db.query(RiwayatPenerimaan)
+            .filter(RiwayatPenerimaan.sekolah_id.in_(sekolah_ids))
+            .filter(RiwayatPenerimaan.tnr_min.isnot(None))
+            .filter(RiwayatPenerimaan.jarak_maks_km.isnot(None))
+            .order_by(RiwayatPenerimaan.sekolah_id.asc(), RiwayatPenerimaan.tahun.desc())
+            .all()
+        )
+        # Ambil cuma riwayat TERBARU per sekolah (baris pertama krn sudah di-order tahun desc)
+        ambang_by_sekolah = {}
+        for rw in riwayat_rows:
+            if rw.sekolah_id not in ambang_by_sekolah:
+                ambang_by_sekolah[rw.sekolah_id] = rw
+
+        for r in union_list:
+            ambang = ambang_by_sekolah.get(r["sekolah_id"])
+            if ambang:
+                persen_jarak    = _persen_ambang(r["jarak_lurus_km"], ambang.jarak_maks_km, 'max')
+                persen_akademik = _persen_ambang(nilai_rapor_f, ambang.tnr_min, 'min') if nilai_rapor_f else None
+                if persen_akademik is not None:
+                    estimasi = round(persen_jarak * 0.7 + persen_akademik * 0.3)
+                else:
+                    estimasi = persen_jarak
+                r["estimasi_peluang"] = estimasi
+                r["estimasi_sumber"]  = "historis"
+                r["estimasi_tahun"]   = ambang.tahun
+            else:
+                # Fallback: estimasi umum berbasis skor_jarak (perilaku lama)
+                r["estimasi_peluang"] = max(0, min(100, round(r["skor_jarak"])))
+                r["estimasi_sumber"]  = "umum"
+                r["estimasi_tahun"]   = None
 
     if union_list:
         destinations = [
